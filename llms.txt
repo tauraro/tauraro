@@ -1,0 +1,76 @@
+# Tauraro
+
+> Compiled, statically-typed systems programming language with Python-style indentation syntax. Compiles to C then native machine code via GCC/Clang. First language with full bilingual keyword support (English + Hausa). Self-hosted compiler written entirely in Tauraro itself. Automatic memory management via ownership inference — no borrow checker annotations, no GC, no manual free. ~13,700 lines of compiler source, ~8,000 lines stdlib.
+
+Important context: Tauraro uses a unity-build model — all imports are resolved into a single flat declaration list. Ownership is inferred automatically by the semantic analyzer (every heap-allocated variable gets `free()` injected at scope exit). The compiler is self-hosted and bootstraps via a portable C seed. Zero-cost abstractions: classes → C structs, interfaces → vtable structs (one pointer dereference per virtual call), generics → monomorphized (no boxing). The C backend is mature (5,697 lines); the LLVM IR backend is a text-IR skeleton (362 lines).
+
+## Language Documentation
+
+- [Introduction](docs/lang/01_intro.md): Philosophy, compiler pipeline, CLI flags, quick start, cross-compilation, self-hosted bootstrap
+- [Variables & Types](docs/lang/02_variables_and_types.md): Mutability, type system, inference, all primitive types, literals
+- [Operators](docs/lang/03_operators.md): Arithmetic, bitwise, logical, comparison, cast (`as`), precedence table
+- [Control Flow](docs/lang/04_control_flow.md): if/elif/else, while, for, break/continue, match/case pattern matching
+- [Functions](docs/lang/05_functions.md): def, parameters, return types, throws, `?` operator, generics, async, closures, decorators
+- [Strings & F-Strings](docs/lang/06_strings.md): String literals (including raw/triple-quoted/byte), escape sequences, f-string interpolation, string methods
+- [Collections](docs/lang/07_collections.md): List[T], Dict, Set, Tuple, comprehensions, iteration protocols
+- [Classes & Extend](docs/lang/08_classes.md): class/extend split design, fields, methods, init, self, pub, static methods, dunder methods
+- [Enums](docs/lang/09_enums.md): Algebraic data types with variants, pattern matching with destructuring
+- [Interfaces](docs/lang/10_interfaces.md): interface, implements, vtable dispatch, polymorphism across class/enum types
+- [Generics](docs/lang/11_generics.md): Generic functions and classes, type parameters, where clauses, monomorphization at compile time
+- [Error Handling](docs/lang/12_error_handling.md): try/except/finally, throws annotation, Result[T,E] type, `?` propagation operator
+- [Memory & Ownership](docs/lang/13_memory_and_ownership.md): Ownership states (Own/Borrow/Move/Shared/Stack), M-1 through M-7 safety rules, clone(), shared ownership, unsafe blocks
+- [Unsafe & Pointers](docs/lang/14_unsafe_and_pointers.md): unsafe: blocks, Pointer[T], alloc/dealloc, pointer arithmetic, void pointers
+- [Modules](docs/lang/15_modules.md): import/from, pub/export, module resolution algorithm, TAURARO_PATH
+- [Concurrency](docs/lang/16_concurrency.md): async/await, spawn, task_group:, Chan[T], Mutex[T], Atomic[T], Sendable, StructuredGroup, IOPoll/EventLoop
+- [Extern & FFI](docs/lang/17_extern_and_ffi.md): extern "C" blocks, variadic functions, linking with -l and --link, ABI compatibility
+- [GPU & Inline Assembly](docs/lang/18_gpu_and_asm.md): gpu: blocks (OpenMP parallel loops), asm() for inline assembly, memory barriers
+- [Compiler Error Reference](docs/lang/19_compiler_errors.md): Every error code (M-1 through M-7, T-1 through T-5, N-1, F-1 through F-3, U-1) with cause, example, and fix
+- [Advanced Patterns](docs/lang/20_advanced_patterns.md): Idioms, design patterns, performance optimization, best practices matrix
+- [Operator Overloading](docs/lang/21_operator_overloading.md): Dunder methods: `__add__`, `__sub__`, `__str__`, `__iter__`, `__getitem__`, `__enter__`/`__exit__` for `with`
+
+### Advanced Topics
+
+- [Lifetimes (`from` keyword)](docs/lang/advanced/01_lifetimes.md): Borrow lifetime annotations, escape analysis, `-> T from param` for returning pointers into caller data
+- [Advanced Ownership](docs/lang/advanced/02_advanced_ownership.md): Move semantics deep dive, Shared[T] reference counting, explicit borrow patterns
+- [Channel Select](docs/lang/advanced/03_channel_select.md): `select:` blocks for multiplexed channels, timeout arms, fan-in/fan-out, non-blocking ops
+- [Generators](docs/lang/advanced/04_generators.md): Generator expressions `(x for x in ...)`, lazy evaluation (note: not currently supported via `yield`)
+- [Decorators](docs/lang/advanced/05_decorators.md): `@inline`, `@hot`, `@property`, custom decorators with arguments
+- [Sendable & Thread Safety](docs/lang/advanced/06_sendable.md): Sendable interface, compile-time thread-safety enforcement, StructuredGroup
+
+## Standard Library
+
+- [std.async](docs/std/async.md): Channels, tasks, mutexes, semaphores, barriers, StructuredGroup, IOPoll, EventLoop
+- [std.collections](docs/std/collections.md): Stack, Queue, Deque, Set (with algebra), Counter, Pair/Triple, MinHeap/MaxHeap, LinkedList, Graph
+- [std.compress](docs/std/compress.md): zlib compress/decompress, raw deflate/inflate (`-lz` linker flag required)
+- [std.crypto](docs/std/crypto.md): SHA-256, HMAC-SHA256, MD5, UUID v4 generation
+- [std.encoding](docs/std/encoding.md): JSON, Base64, Hex encoding/decoding
+- [std.io](docs/std/io.md): File I/O, directory operations, path manipulation, console I/O, buffered readers/writers
+- [std.iter](docs/std/iter.md): Range construction, int/float vector transforms, folds, prefix sums, normalization
+- [std.math](docs/std/math.md): Integer math, floating-point math, bitwise operations, statistics, random number generation
+- [std.net](docs/std/net.md): TCP, UDP, DNS resolution, URL parsing, HTTP client (7 verbs), HTTPS client (OpenSSL), HTTP server + router
+- [std.regex](docs/std/regex.md): POSIX extended regex: match, find, replace, split, count
+- [std.string](docs/std/string.md): String utilities (Str class), formatting (Fmt class), parsing, line/word splitting
+- [std.sys](docs/std/sys.md): Environment variables, filesystem operations, process control, timing, OS info, platform detection
+- [std.test](docs/std/test.md): Lightweight unit-testing framework
+- [std.unicode](docs/std/unicode.md): UTF-8 codepoint iteration, slicing, case conversion, Unicode classification
+
+## Compiler Source Code
+
+- [src/main.tr](src/main.tr): CLI driver — args, pipeline orchestration, C compilation/linking (830 lines)
+- [src/token.tr](src/token.tr): Token types — all literals, keywords (English+Hausa), operators, delimiters (359 lines)
+- [src/lexer.tr](src/lexer.tr): Lexer — tokenizer with indentation tracking, keyword recognition (677 lines)
+- [src/parser.tr](src/parser.tr): Recursive-descent parser — classes, enums, generics, match, async, GPU blocks, unsafe (2,259 lines)
+- [src/ast.tr](src/ast.tr): AST node definitions — Program, Decl, Expr, Stmt, AstType, Pattern (483 lines)
+- [src/sema.tr](src/sema.tr): Semantic analyzer — type checking, ownership inference, scope management, HIR lowering (2,498 lines)
+- [src/hir.tr](src/hir.tr): HIR definitions — typed intermediate representation, HirExpr (45 variants), HirStmt (26 variants), HirProgram (296 lines)
+- [src/resolver.tr](src/resolver.tr): Module resolver — imports, search paths, unity-build model (240 lines)
+- [src/codegen/c.tr](src/codegen/c.tr): C backend — per-module C file generation, monomorphization, runtime header (5,697 lines)
+- [src/codegen/llvm.tr](src/codegen/llvm.tr): LLVM IR text backend — experimental, mirrors Rust bootstrap (362 lines)
+
+## Examples
+
+29 annotated example programs in [examples/](examples/) covering every language feature from variables to async concurrency to FFI. Start with `01_variables_and_types.tr` through `28_first_class_functions.tr`.
+
+## Benchmarks
+
+10 benchmark suites in [benchmarks/](benchmarks/) comparing Tauraro vs C vs Rust: fibonacci, float multiply, Newton sqrt, Mandelbrot, sieve, N-body, matrix multiply, and more.
