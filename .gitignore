@@ -22,3 +22,6 @@ bootstrap/*.zip
 !bootstrap/c/
 !bootstrap/c/**
 
+# AI-friendly documentation indexes (not debug output)
+!llms*.txt
+

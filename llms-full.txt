@@ -1,0 +1,256 @@
+# Tauraro — Full AI-Friendly Documentation
+
+> Compiled, statically-typed systems programming language with Python-style indentation syntax. Compiles to C then native machine code via GCC/Clang. First language with full bilingual keyword support (English + Hausa). Self-hosted compiler written entirely in Tauraro. Automatic memory management via ownership inference — no borrow checker annotations, no GC, no manual free.
+
+Important context: Tauraro uses a unity-build model — all imports are resolved into a single flat declaration list. Ownership is inferred automatically by the semantic analyzer. Zero-cost abstractions throughout. The C backend is mature (5,697 lines); the LLVM IR backend is experimental (362 lines). The compiler is fully self-hosted — `tauraroc` compiles `src/main.tr` to produce itself.
+
+<doc title="CLI Reference" path="docs/lang/01_intro.md">
+CLI: `tauraroc <file.tr> [options]`
+Flags: --version, --run, --check, --emit c|ast|mir, --backend llvm, -o <path>, -O0/-O1/-O2/-O3/-Os, --verbose, --static, --debug (ASAN), --strict, --target <triple>, --sysroot <path>, --link <path>, -l<name>, --target (android-*, ios, linux-*, windows-*, macos-*, embedded-*, wasm-*).
+Env: TAURARO_PATH — extra module search paths (colon-separated on POSIX, semicolon on Windows).
+Compiler pipeline: .tr → Lexer → Parser → AST → Sema (type-check + ownership) → HIR → C Codegen → GCC/Clang → native binary.
+Self-hosted: bootstrap via portable C seed (bootstrap/c/), then compiler compiles itself.
+</doc>
+
+<doc title="Variables & Types" path="docs/lang/02_variables_and_types.md">
+Variables immutable by default. Use `mut` for mutable bindings. `const` for compile-time constants.
+Type inference with explicit `: Type` annotations available. All type conversions use explicit `as` cast — no implicit coercion.
+
+Primitive types: int (i64), float (f64), bool, char (1 byte), str (pointer).
+Fixed-width: i8/i16/i32/i64/i128, u8/u16/u32/u64/u128, isize/usize, f32/f64.
+Compound: List[T], Vec[T], Dict, Map[K,V], Set[T], Pointer[T], Result[T,E], Option[T], Shared[T], Chan[T], Mutex[T], Atomic[T].
+
+Nil literal: `none` requires Option[T] or pointer type (rule M-7).
+</doc>
+
+<doc title="Operators" path="docs/lang/03_operators.md">
+Arithmetic: +, -, *, /, %, ** (power), // (floor div), +=, -=, *=, /=, %=, **=, //=.
+Comparison: ==, !=, <, >, <=, >=.
+Bitwise: &, |, ^, ~, <<, >>, &=, |=, ^=, <<=, >>=.
+Logical: and, or, not (short-circuiting).
+Other: `as` (cast), `is` (type check), `in` / `not in` (membership), `..` (range), `..=` (inclusive range), `...` (spread), `->` (return type), `=>` (fat arrow), `?` (error propagation).
+Ternary: `if cond then_expr else else_expr`.
+</doc>
+
+<doc title="Control Flow" path="docs/lang/04_control_flow.md">
+if/elif/else: `if cond: ... elif cond2: ... else: ...`
+while: `while cond: ...`
+for: `for var in iterable: ...` — works with ranges (`range(n)`), List, Vec, Set, Dict, str, and any type implementing `__iter__`/`__next__`.
+break/continue: standard semantics.
+match/case: pattern matching with destructuring. `match val: case Pattern: ... case _: ...`
+Patterns: literal, variable binding, enum variant destructuring, tuple destructuring, wildcard `_`.
+</doc>
+
+<doc title="Functions" path="docs/lang/05_functions.md">
+def: `def name(params) -> ReturnType:`
+Parameters: typed `param: Type`. No default parameters.
+Return: explicit `-> Type` or omitted for void. Rule F-3: all code paths must return.
+Throws: `def fn() throws -> T` — errors propagate via `?` operator.
+Generics: `def fn[T](x: T) -> T`
+Async: `async def fn() -> T` — must use `await` inside. Rules C-4/C-5/C-6 enforce async context.
+Closures: `\|params\| expr` or `\|params\| { block }` with captures (by reference default).
+Decorators: `@inline`, `@hot`, `@property`, custom decorators with arguments.
+Variadic functions: FFI only via `extern "C"` blocks.
+</doc>
+
+<doc title="Strings & F-Strings" path="docs/lang/06_strings.md">
+String literals: double-quoted `"..."`, raw `r"..."`, triple-quoted `"""..."""`, byte `b"..."`, f-strings `f"..."`.
+Escape sequences: \n, \t, \\, \", \0, \xNN, \uNNNN.
+F-string interpolation: `f"value = {expr}"` — zero overhead, compiled to string concatenation at compile time.
+String methods: len(), index_of(), slice(), trim(), contains(), starts_with(), ends_with(), replace(), split(), to_int(), to_float().
+</doc>
+
+<doc title="Collections" path="docs/lang/07_collections.md">
+List[T]: `[1, 2, 3]` — growable typed array. Methods: append(), get(), set(), len(), sort(), reverse(), contains(), index_of(), insert(), remove(), clear(), filter(), map(), fold(), join().
+Dict: `{"key": value}` — string-keyed hash map (built-in). Also Map[K,V] from std.core.map for typed keys.
+Set[T]: `{1, 2, 3}` — unordered unique collection. Methods: add(), remove(), contains(), union(), intersection(), difference().
+Tuple: `(a, b, c)` — fixed-size heterogeneous group.
+Comprehensions: `[expr for var in iterable]`, `[expr for var in iterable if cond]`, `{k: v for ...}`, `{expr for ...}`.
+</doc>
+
+<doc title="Classes & Extend" path="docs/lang/08_classes.md">
+Separate data (`class`) from behavior (`extend`). class declares fields only. extend adds methods.
+Fields: typed `pub name: Type`. Private by default; `pub` makes them accessible outside the module.
+Methods: first parameter `self` gives instance access. Static methods omit self.
+Init: convention `pub def init(args) -> ClassName` — returns new instance.
+Inheritance: `class Child extends Parent:` — single inheritance. `super.method()` for parent calls.
+Multiple extend blocks allowed — organize by concern.
+Method dispatch: static by default. Dynamic dispatch only via interfaces (vtables).
+Dunder methods: __add__, __sub__, __mul__, __str__, __repr__, __iter__, __next__, __getitem__, __setitem__, __len__, __enter__, __exit__, __contains__.
+</doc>
+
+<doc title="Enums" path="docs/lang/09_enums.md">
+Algebraic data types with named variants. `enum Name: Variant1(args) Variant2(args)`
+Pattern matching: `match val: case Enum.Variant(a, b): ...`
+Variants can carry data (tagged union — no heap allocation).
+Compiled to C structs with a discriminant tag and union payload.
+</doc>
+
+<doc title="Interfaces" path="docs/lang/10_interfaces.md">
+`interface IName:` — method signatures only, no fields, no defaults.
+`class Foo: ... extend Foo: pub def method(self) -> void: ... implements IFoo:`
+implements block: provides vtable method bindings — maps class methods to interface signatures.
+Dynamic dispatch via vtable struct (one pointer dereference per virtual call).
+`is` operator for runtime type checking against interfaces.
+Interface names conventionally start with `I`.
+</doc>
+
+<doc title="Generics" path="docs/lang/11_generics.md">
+`def fn[T](x: T) -> T` — type parameters in square brackets.
+Multiple params: `def fn[A, B](a: A) -> B`.
+Generic classes: `class Box[T]: pub value: T`.
+Where clauses: `def fn[T](x: T) where T: SomeInterface`.
+Monomorphization at compile time — separate C function/struct per concrete type combination. Zero runtime cost.
+</doc>
+
+<doc title="Error Handling" path="docs/lang/12_error_handling.md">
+try/except/finally: `try: ... except e: ... finally: ...`
+throws: `def fn() throws -> T` marks functions that can fail.
+`?` operator: `result = try fn()?` — propagates errors to caller.
+Result[T,E]: `Ok(value)` or `Err(error)` — returned by `throws` functions.
+Warnings: unhandled Result values generate compiler warning.
+</doc>
+
+<doc title="Memory & Ownership" path="docs/lang/13_memory_and_ownership.md">
+Automatic ownership inference. Five states: Own (heap owned, free at scope exit), Borrow (temporary ref), Move (ownership transferred), Shared (refcounted), Stack (scalar/stack value).
+Rules: M-1 (auto inference), M-2 (no use-after-move), M-3 (no double-free), M-4 (no dangling pointers), M-5 (no aliased mutation), M-6 (immutable by default), M-7 (none requires Option).
+clone(x) — deep copy. shared keyword — refcounted ownership.
+ownership system tracks all safe code; inside unsafe: blocks, raw pointers are untracked.
+</doc>
+
+<doc title="Unsafe & Pointers" path="docs/lang/14_unsafe_and_pointers.md">
+`unsafe:` block — scope for operations the compiler cannot verify.
+Operations: &x (address-of), p.read(), p.write(v), p.offset(n) (pointer arithmetic), alloc[T](n), dealloc(ptr), asm(), casts to/from Pointer[T].
+Pointer[T]: generic raw pointer. Methods: read(), write(), offset().
+`voidptr` / `Pointer[void]` for type-erased pointers.
+--strict flag: alloc/dealloc outside unsafe is error U-1.
+Inside unsafe: type checking still active, ownership tracking still protects outer-scope bindings.
+</doc>
+
+<doc title="Modules" path="docs/lang/15_modules.md">
+import/from: `import module`, `from module import name`, `from module import name as alias`.
+Unity-build model: all imports resolved into flat declaration list by the resolver.
+Module resolution: search paths = binary dir, TAURARO_PATH env var, CWD.
+`pub` makes items visible outside module. `export` re-exports from sub-modules.
+Package layout: `packagename/mod.tr` (directory module) or `packagename.tr` (file module).
+Dotted paths: `from std.collections.vec import Vec`.
+</doc>
+
+<doc title="Concurrency" path="docs/lang/16_concurrency.md">
+Primitives: async def / await, spawn, task_group:, await_all(), await_timeout(), Chan[T], Mutex[T], RwLock[T], Atomic[T], ThreadLocal[T], Shared[T], Sendable, StructuredGroup, IOPoll/EventLoop, Pool.
+Compile-time safety: T-1 (Sendable check on spawn), T-2 (race detection), T-3 (deadlock detection).
+Channels: `chan = Chan[T].init(capacity)` — typed send/receive.
+Async functions: `async def fn() -> T` — await can only appear in async context.
+</doc>
+
+<doc title="Extern & FFI" path="docs/lang/17_extern_and_ffi.md">
+`extern "C":` block for C ABI declarations. Functions declared without body.
+Type mapping: int→i64, float→double, str→const char*, Pointer[T]→T*.
+`--link <path>` and `-l<name>` for linking external libraries.
+Variadic functions: `fn(format: str, ...)` — C varargs support.
+</doc>
+
+<doc title="GPU & Inline Assembly" path="docs/lang/18_gpu_and_asm.md">
+`gpu:` block — compiles to OpenMP `#pragma omp parallel for`. Requires `-fopenmp` flag.
+`asm("instructions")` — inline assembly (compiler-specific syntax, passed through to C).
+Memory barriers: `__sync_synchronize()`.
+</doc>
+
+<doc title="Compiler Error Reference" path="docs/lang/19_compiler_errors.md">
+M-series (Memory): M-1 (allocation not tracked), M-2 (use after move), M-3 (double free), M-4 (dangling pointer), M-5 (null dereference), M-6 (assign to immutable), M-7 (none on value type).
+T-series (Type): T-1 (no implicit coercion), T-2 (type mismatch), T-3 (wrong arg type), T-4 (return type mismatch), T-5 (cannot infer type).
+N-series (Name): N-1 (reserved name used as declaration).
+F-series (Function): F-1 (wrong arg count), F-2 (undefined call), F-3 (missing return).
+U-series (Unsafe): U-1 (alloc outside unsafe with --strict).
+Concurrency: C-4 (await outside async), C-5 (spawn outside async), C-6 (task_group outside async).
+</doc>
+
+<doc title="Advanced Patterns" path="docs/lang/20_advanced_patterns.md">
+Singleton pattern: use static class with private constructor.
+Factory pattern: static init method returning new instance.
+Builder pattern: method chaining with `self` returns.
+RAII: ownership system provides deterministic cleanup at scope exit.
+Visitor pattern: interfaces + dynamic dispatch.
+Performance: prefer Vec over List for small collections, use stack allocation when possible, avoid cloning in hot paths.
+</doc>
+
+<doc title="Operator Overloading" path="docs/lang/21_operator_overloading.md">
+Dunders: __add__, __sub__, __mul__, __div__, __mod__, __pow__, __neg__, __pos__, __str__, __repr__, __iter__, __next__, __getitem__, __setitem__, __len__, __enter__, __exit__, __contains__, __eq__, __ne__, __lt__, __le__, __gt__, __ge__, __hash__.
+Implemented inside `extend` blocks. Each dunder has a specific signature convention.
+`with` statement uses __enter__/__exit__ for context managers.
+</doc>
+
+<doc title="Standard Library" path="docs/std/README.md">
+std.async — Channels (Chan, Task, Mutex, Semaphore, Barrier, StructuredGroup, IOPoll, EventLoop, Pool).
+std.collections — Stack, Queue, Deque, Set (union/intersection/difference), Counter, Pair/Triple, MinHeap/MaxHeap, LinkedList, Graph (BFS/DFS/topological sort).
+std.compress — zlib compress/decompress, raw deflate/inflate. Requires `-lz` linker flag.
+std.crypto — SHA-256, HMAC-SHA256, MD5, UUID v4.
+std.encoding — JSON parser/serializer, Base64 encode/decode, Hex encode/decode.
+std.io — File I/O (read/write/append), directory operations (mkdir/rmdir/listdir), path manipulation, console (print/input/color), buffered readers/writers.
+std.iter — Range construction, int/float vector transforms (map/filter/reduce), prefix sums, min/max/mean, normalization.
+std.math — Integer GCD/LCM, prime testing, bit counting, floating-point trig/log/exp, statistics (mean/variance/stdev), random (shuffle/sample), complex numbers.
+std.net — TCP (listen/connect/send/recv), UDP, DNS resolution, URL parsing, HTTP client (7 verbs), HTTPS client (OpenSSL), HTTP server + router (routes/middleware/JSON).
+std.regex — POSIX extended regex: match, find_all, replace, split, count.
+std.string — Str class (case conversion, padding, splitting, word count), Fmt class (printf-style formatting).
+std.sys — env vars, file system (exists/type/size/permissions/rename/copy/remove), process (spawn/exec/kill/wait), timing (now/sleep/timer), OS info, platform detection.
+std.test — Lightweight unit-testing: test! macro, assert_eq, assert_ne, assert_approx, test groups, suite runner.
+std.unicode — UTF-8 codepoint iteration, slice by codepoint, case conversion, Unicode classification (is_alpha/is_digit/is_space/is_punct).
+</doc>
+
+<doc title="Benchmarks" path="benchmarks/README.md">
+Tauraro vs C vs Rust on 10 compute workloads. Key results: Tauraro beats C on 8/9 benchmarks, ties/beats Rust on 5/10.
+Fibonacci 1B: Tauraro 0.51x C, 1.12x Rust. MatMul 400x400: 0.51x C, 1.00x Rust. Mandelbrot: 0.96x C, 0.90x Rust.
+Flags: tauraroc -O3 passes -march=native -funroll-loops to GCC.
+Benchmarks: integer sum, fibonacci, float mul, xorshift, newton sqrt, mandelbrot, sieve, nbody, collatz, matmul.
+</doc>
+
+<doc title="Compiler Source — main.tr" path="src/main.tr">
+830 lines. Entry point + CLI driver. Parses args, orchestrates pipeline: resolve → lex → parse → sema → codegen → compile. Handles all CLI flags, cross-compilation, module search paths (binary dir, TAURARO_PATH, CWD), runtime header resolution (multiple fallback paths), C compilation (auto-detects gcc/clang/cc), build directory management. Key functions: detect_c_compiler(), resolve_target_triple(), compile_all_c(), read_runtime_header().
+</doc>
+
+<doc title="Compiler Source — token.tr" path="src/token.tr">
+359 lines. Token enum with 185 variants. Categories: literals (IntLit, FloatLit, StrLit, TripleStrLit, ByteStrLit, RawStrLit, CharLit, FStrLit, BoolLit), keywords (52 English + Hausa equivalents), operators (arithmetic, comparison, bitwise, assignment), delimiters (parens, brackets, braces, colon, comma, semicolon, hash), indentation (Indent/Dedent/Newline). Helpers: is_eof(), is_newline(), is_keyword(), debug().
+</doc>
+
+<doc title="Compiler Source — lexer.tr" path="src/lexer.tr">
+677 lines. Recursive lexer with indentation tracking. keyword_to_token() maps English+Hausa keyword strings to Token variants. Handles: integer/float literals (including hex/octal/binary), string literals (normal/raw/triple/byte/f-string), char literals, operators, indentation counting for Python-style blocks. Produces Vec[Token] with Indent/Dedent tokens.
+</doc>
+
+<doc title="Compiler Source — parser.tr" path="src/parser.tr">
+2,259 lines. Recursive-descent parser. Classes: Parser with peek(), advance(), match_tok(), expect_tok(). Methods: parse_program(), parse_decl() (function/class/enum/interface/extend/import), parse_stmt() (if/while/for/match/try/with/asm/gpu/defer/return/break/continue/raise/spawn/task_group/chan_select/assign/expr), parse_expr() (full precedence climbing: ternary → or → and → comparison → bitwise → arithmetic → unary → power → call/member → primary), parse_pattern(), parse_type(). Handles all language features including async, generics, decorators, closures, comprehensions.
+</doc>
+
+<doc title="Compiler Source — ast.tr" path="src/ast.tr">
+483 lines. AST node definitions. Key types: AstType (with name, generic args, from_param lifetime), GenericConstraint, Decorator, Program (list of Decls), Decl enum (DFunction, DClass, DEnum, DInterface, DExtend, DImport, DFromImport, DExtern, DExternFn, DConst, DStruct, DExport, DDecorator, DActor), Expr enum (40+ variants), Stmt enum (25+ variants), Pattern enum, Block, Ownership enum (Own/Borrow/Move/Shared/Stack). @copy annotation on AstType for arena-allocation safety.
+</doc>
+
+<doc title="Compiler Source — sema.tr" path="src/sema.tr">
+2,498 lines. Semantic analyzer — largest non-codegen file. Key classes: SymbolKind (SFunction/SClass/SEnum/SVariable/SInterface), Symbol (name, kind, type, scope info, ownership state), Scope (variable map). Sema class holds type environment, function signatures, class layouts. Methods: analyze(Program) → HirProgram, type inference, ownership analysis (M-1 through M-7), scope management, error reporting. Generates HIR from validated AST. Tracks: symbols, types, ownership states, borrow lifetimes, move semantics.
+</doc>
+
+<doc title="Compiler Source — hir.tr" path="src/hir.tr">
+296 lines. HIR types. HirExpr enum (45 variants: ELitInt through EAddrOf). HirStmt enum (26 variants: SLet through SExpr). HirBlock, HirFunction, HirClass, HirEnum, HirInterface, HirProgram. Helper types: HirParam, HirField, HirVariant, HirFStringPart, HirCatchClause, HirComprehension, HirMatchArm, HirChanSelectArm. Helper functions: box_hirexpr(), box_hirstmt(), hir_expr_type().
+</doc>
+
+<doc title="Compiler Source — resolver.tr" path="src/resolver.tr">
+240 lines. Module resolver — unity-build model. ModuleResolver class with add_search_path() and resolve_main(). resolve_file(): reads source, lexes, parses, collects decls. resolve_module_path(): searches for mod.tr then .tr in search paths. Supports pub/private visibility filtering. Search order: TAURARO_PATH entries → binary dir → CWD.
+</doc>
+
+<doc title="Compiler Source — codegen/c.tr" path="src/codegen/c.tr">
+5,697 lines. C backend — largest file in compiler. CGenerator class with register_program(), scan_mono_prog(), generate_types_header(), generate_module_c(), generate_main_c(). Per-module C file generation: classes → C structs + ClassName_method() functions, interfaces → vtable structs + wrapper functions, enums → tagged unions, generics → monomorphized per type argument. Name sanitization (_safe_c_varname), pointer validity checks (_is_invalid_ptr for 0xbaadf00d, 0xcccccccc etc.), type classification helpers. Generates: build/tauraro_types.h, build/include/<path>.c (stdlib), build/module_<name>.c (user modules), build/main.c.
+</doc>
+
+<doc title="Compiler Source — codegen/llvm.tr" path="src/codegen/llvm.tr">
+362 lines. LLVM IR text backend. Mirrors Rust bootstrap version. Maps Tauraro types to LLVM types (int→i64, float→double, bool→i1, str→ptr). Experimental — not the default backend.
+</doc>
+
+<doc title="Build System" path="scripts/build.sh">
+41 lines. Bootstrap build: compiles src/main.tr using existing tauraroc binary. BOOTSTRAP_BIN env var or PATH lookup. ARM64 Linux: wraps musl-gcc for portable binary. --static flag. Output: ./tauraroc. Old bootstrap compat: moves src/build/tauraroc → ./tauraroc.
+Windows equivalent: scripts/build.ps1 (27 lines).
+CI: .github/workflows/build.yml (235 lines) — runs on push/PR across ubuntu, windows, macos. Stages: prepare bootstrap binary (compile bootstrap/c/main.c or download release), build, verify, upload artifact. Release on v* tags.
+Bootstrap chain: portable C seed (bootstrap/c/) → stage0 → src/main.tr → tauraroc binary.
+</doc>
+
+<doc title="Runtime" path="runtime/tauraro_rt.h">
+4,313 lines. C runtime header. Types: TR_String (length + data), TR_Vec (generic dynamic array), TR_Map (hash map). Memory: ref-counted allocations, TR_AllocHeader. Concurrency: TR_Mutex (pthreads/SRWLock/CriticalSection), TR_ConditionVar, TR_Thread, TR_Channel. Async: TR_Future, TR_Waker, TR_EventLoop (epoll/IOCP/kqueue). I/O: TR_File, TR_Buffer. Platform abstraction: Windows (WIN32) / POSIX / WASM.
+</doc>
