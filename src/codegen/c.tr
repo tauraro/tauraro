@@ -335,18 +335,29 @@ pub class CGenerator:
     pub def gen_func_body(self, body: HirBlock, indent: int):
         self.reset_defer_stack()
         self.gen_block(body, indent)
+        mut ends_in_return = false
+        if body.stmts.len > 0:
+            match body.stmts.get(body.stmts.len - 1).read():
+                case HirStmt.SReturn(_): ends_in_return = true
+                case _: pass
         if self.defer_stack.len > 0:
-            mut ends_in_return = false
-            if body.stmts.len > 0:
-                match body.stmts.get(body.stmts.len - 1).read():
-                    case HirStmt.SReturn(_): ends_in_return = true
-                    case _: pass
             if not ends_in_return:
                 mut fdi = self.defer_stack.len - 1
                 while fdi >= 0:
                     self.w(self.defer_stack.get(fdi))
                     if fdi == 0: break
                     fdi = fdi - 1
+        # A `throws` function's C return type is `Result`, unlike a plain void
+        # function's `void` -- falling off the end of a non-void C function
+        # with no return statement is undefined behavior (observed as garbage
+        # SqliteError codes: a one-line body like `self.exec("BEGIN")?` has no
+        # trailing `return`, which is harmless for an ordinary void function
+        # but reads whatever garbage is in the return register for `Result`).
+        # This heuristic (last top-level statement literally SReturn) can miss
+        # an if/else where EVERY branch returns, in which case this adds a
+        # harmless unreachable statement -- never wrong, occasionally redundant.
+        if self.cur_throws_ty != "" and not ends_in_return:
+            self.w("    return ((Result){.tag=Result_Ok});\n")
 
     # Append the outlined closure functions (accumulated during body codegen) to
     # the current translation unit, at file scope after everything else. Each
@@ -6253,6 +6264,15 @@ pub class CGenerator:
         mut saved_buf = self.buf
         mut saved_cap = self.closure_cap_set
         mut saved_env = self.closure_env_var
+        # A closure is never itself `throws` (lambda/`def(...)->R` closures carry
+        # no throws annotation in their type — see transaction.tr's note on this
+        # in the tausqlite3 library). Without resetting this, a closure literal
+        # written inside a throws function's body inherited that OUTER function's
+        # cur_throws_ty, so `raise(...)` inside the closure wrongly emitted
+        # `return Result_Err(...)` (a Result, mismatching the closure's real
+        # `long long`/void C return type) instead of `_tr_exc_raise(...)`.
+        mut saved_throws = self.cur_throws_ty
+        self.cur_throws_ty = ""
         self.buf = StringBuilder.init(512)
         self.closure_cap_set = Map[str, bool].init(8)
         mut cj = 0
@@ -6276,6 +6296,7 @@ pub class CGenerator:
         self.buf = saved_buf
         self.closure_cap_set = saved_cap
         self.closure_env_var = saved_env
+        self.cur_throws_ty = saved_throws
         self.closure_buf.append(thisdef)
 
         # Capture-address list (shared by heap and stack forms). If we are inside
@@ -6709,7 +6730,8 @@ pub class CGenerator:
                     match e.read():
                         case HirExpr.ETryExpr(inner_try, _):
                             mut tmp_qr = "_qr" + self.next_temp()
-                            self.w(pad + "Result " + tmp_qr + " = (" + self.gen_expr(inner_try) + ");\n")
+                            mut inner_qr_v = self.flush_wraps(self.gen_expr(inner_try), false)
+                            self.w(pad + "Result " + tmp_qr + " = (" + inner_qr_v + ");\n")
                             self.w(pad + "if (" + tmp_qr + ".tag == Result_Err) return " + tmp_qr + ";\n")
                             return
                         case _: pass
@@ -6742,7 +6764,8 @@ pub class CGenerator:
                     match e.read():
                         case HirExpr.ETryExpr(inner_try2, ok_ty2):
                             mut tmp_qr2 = "_qr" + self.next_temp()
-                            self.w(pad + "Result " + tmp_qr2 + " = (" + self.gen_expr(inner_try2) + ");\n")
+                            mut inner_qr_v2 = self.flush_wraps(self.gen_expr(inner_try2), false)
+                            self.w(pad + "Result " + tmp_qr2 + " = (" + inner_qr_v2 + ");\n")
                             self.w(pad + "if (" + tmp_qr2 + ".tag == Result_Err) return " + tmp_qr2 + ";\n")
                             if self.cur_throws_ty != "":
                                 mut ok_c2 = self.type_to_c(ok_ty2)
@@ -6752,8 +6775,14 @@ pub class CGenerator:
                                     self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=" + tmp_qr2 + ".data.Ok.val});\n")
                             else:
                                 mut ok_c2b = self.type_to_c(ok_ty2)
-                                if _is_int_type(ok_ty2.name) or ok_ty2.name == "bool":
+                                if _is_int_type(ok_ty2.name) or ok_ty2.name == "bool" or ok_ty2.name == "char":
                                     self.w(pad + "return (" + ok_c2b + ")(uintptr_t)" + tmp_qr2 + ".data.Ok.val;\n")
+                                elif _is_float_type(ok_ty2.name):
+                                    self.w(pad + "return _tr_ptr_to_f64(" + tmp_qr2 + ".data.Ok.val);\n")
+                                elif _is_str_type(ok_ty2.name):
+                                    self.w(pad + "return _tr_str_unbox(" + tmp_qr2 + ".data.Ok.val);\n")
+                                elif ok_c2b.ends_with("*"):
+                                    self.w(pad + "return (" + ok_c2b + ")" + tmp_qr2 + ".data.Ok.val;\n")
                                 else:
                                     self.w(pad + "return (" + ok_c2b + "*)" + tmp_qr2 + ".data.Ok.val;\n")
                             return
@@ -6868,13 +6897,23 @@ pub class CGenerator:
                     match v.read():
                         case HirExpr.ETryExpr(inner_try3, ok_ty3):
                             mut tmp_qr3 = "_qr" + self.next_temp()
-                            self.w(pad + "Result " + tmp_qr3 + " = (" + self.gen_expr(inner_try3) + ");\n")
+                            mut inner_qr_v3 = self.flush_wraps(self.gen_expr(inner_try3), false)
+                            self.w(pad + "Result " + tmp_qr3 + " = (" + inner_qr_v3 + ");\n")
                             self.w(pad + "if (" + tmp_qr3 + ".tag == Result_Err) return " + tmp_qr3 + ";\n")
                             mut ok_c3 = self.type_to_c(ok_ty3)
                             if ok_c3 == "void" or ok_c3 == "__auto_type": ok_c3 = "long long"
                             mut ok_val3 = ""
                             if _is_int_type(ok_ty3.name) or ok_ty3.name == "bool" or ok_ty3.name == "char":
                                 ok_val3 = "(" + ok_c3 + ")(uintptr_t)" + tmp_qr3 + ".data.Ok.val"
+                            elif _is_float_type(ok_ty3.name):
+                                ok_val3 = "_tr_ptr_to_f64(" + tmp_qr3 + ".data.Ok.val)"
+                            elif _is_str_type(ok_ty3.name):
+                                ok_val3 = "_tr_str_unbox(" + tmp_qr3 + ".data.Ok.val)"
+                            elif ok_c3.ends_with("*"):
+                                # type_to_c already returned a pointer type (heap class) —
+                                # cast straight to it; appending another '*' here produced a
+                                # double-pointer ("Statement**") and a compile error.
+                                ok_val3 = "(" + ok_c3 + ")" + tmp_qr3 + ".data.Ok.val"
                             else:
                                 ok_val3 = "(" + ok_c3 + "*)" + tmp_qr3 + ".data.Ok.val"
                             if is_const:
@@ -7304,8 +7343,18 @@ pub class CGenerator:
                 self.gen_try(try_body, catches, finally_b, indent)
             case HirStmt.SRaise(e):
                 if self.cur_throws_ty != "":
-                    # throws function: raise becomes return Result_Err
-                    self.w(pad + "return ((Result){.tag=Result_Err, .data.Err.err=" + self.wrap_voidp_arg(e) + "});\n")
+                    # throws function: raise becomes return Result_Err. wrap_voidp_arg(e)
+                    # may itself have hoisted fresh-str-argument temps onto
+                    # wrap_temp_decls/wrap_temp_names (e.g. `raise(Err.init(rc, a + b))`,
+                    # where `a + b` is a fresh concat passed straight into the
+                    # constructor) — flush_wraps here builds the Result value inside a
+                    # statement-expression that declares/releases those temps, so they
+                    # stay scoped to THIS statement instead of leaking onto whatever the
+                    # C generator emits next (a real bug: the undeclared/leaked temp
+                    # previously surfaced in a LATER, unrelated function's body).
+                    mut errv = self.wrap_voidp_arg(e)
+                    mut result_v = self.flush_wraps("((Result){.tag=Result_Err, .data.Err.err=" + errv + "})", false)
+                    self.w(pad + "return " + result_v + ";\n")
                 else:
                     mut raise_s = self.gen_expr(e)
                     if _is_str_type(hir_expr_type(e).name): raise_s = self.strz(raise_s)
@@ -9341,6 +9390,7 @@ pub class CGenerator:
                         self.emitted_fns.insert("i_" + c.name + "_" + m.name, true)
                         self.cur_class = c.name
                         self.cur_func  = m.name
+                        self.cur_throws_ty = m.throws_ty.name
                         self.decl_vars = Map[str, bool].init(64)
                         self.str_local_names = Map[str, bool].init(16)
                         self.coll_local_sfx = Map[str, str].init(16)
@@ -9355,6 +9405,7 @@ pub class CGenerator:
                         self.w("}\n\n")
                         self.cur_class = ""
                         self.cur_func  = ""
+                        self.cur_throws_ty = ""
                         mi = mi + 1
             i = i + 1
         i = 0
@@ -9368,6 +9419,7 @@ pub class CGenerator:
                         mut m = e.methods.get(mi)
                         self.cur_class = e.name
                         self.cur_func  = m.name
+                        self.cur_throws_ty = m.throws_ty.name
                         self.decl_vars = Map[str, bool].init(64)
                         self.str_local_names = Map[str, bool].init(16)
                         self.coll_local_sfx = Map[str, str].init(16)
@@ -9380,6 +9432,7 @@ pub class CGenerator:
                         self.w("}\n\n")
                         self.cur_class = ""
                         self.cur_func  = ""
+                        self.cur_throws_ty = ""
                         mi = mi + 1
             i = i + 1
 
@@ -9405,6 +9458,7 @@ pub class CGenerator:
                         self.emitted_fns.insert(em_key, true)
                         self.cur_func  = f.name
                         self.cur_class = f.class_name
+                        self.cur_throws_ty = f.throws_ty.name
                         self.decl_vars = Map[str, bool].init(64)
                         self.str_local_names = Map[str, bool].init(16)
                         self.coll_local_sfx = Map[str, str].init(16)
@@ -9419,6 +9473,7 @@ pub class CGenerator:
                         self.w("}\n\n")
                         self.cur_func  = ""
                         self.cur_class = ""
+                        self.cur_throws_ty = ""
             i = i + 1
 
         self.flush_closures()

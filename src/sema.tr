@@ -751,6 +751,26 @@ extend Sema:
                     self.warnings.push("[T-3] Sendable class '" + c.name + "' has primitive field '" + fd.name + ": " + fty.name + "' that may cause data races if mutated from multiple threads.\n      FIX: Use 'Atomic[" + fty.name + "]' for safe concurrent mutation, or ensure this field is written only before the object is shared across threads.")
             cfi = cfi + 1
 
+    # An empty `{}` dict literal carries no key/value expressions to infer a
+    # type from, so its lowered EDict keeps an empty-args `Dict` type — codegen's
+    # gen_dict_literal then falls back to the generic string-keyed constructor
+    # even when the real destination is `Dict[int, V]` (an int-keyed TrIDict),
+    # a genuine pointer-type mismatch at the C level (`TrIDict*` field assigned
+    # a `TrMap*`). When the assignment/let target's declared type is a concrete
+    # `Dict[K, V]`, patch the already-lowered empty literal's type to match, so
+    # codegen picks the right backing constructor. No-op for anything that
+    # isn't an empty EDict (a non-empty literal already inferred its own type
+    # from its first entry, which codegen must not silently override).
+    pub def _patch_empty_dict_hint(self, hv: Pointer[HirExpr], hint_ty: AstType) -> Pointer[HirExpr]:
+        if hv as usize == 0 as usize: return hv
+        if hint_ty.name != "Dict" and hint_ty.name != "Map": return hv
+        if hint_ty.args.len < 2: return hv
+        match hv.read():
+            case HirExpr.EDict(hk, hvv, _):
+                if hk.len == 0: return box_hirexpr(HirExpr.EDict(hk, hvv, hint_ty))
+                return hv
+            case _: return hv
+
     # -- Ownership / borrow tracking -------------------------------
 
     pub def mark_moved(self, name: str):
@@ -3769,6 +3789,7 @@ extend Sema:
                 mut ty = AstType.init("void")
                 if ty_ptr as usize != 0 as usize: ty = ty_ptr.read()
                 mut hval = self.lower_expr(val_ptr)
+                if ty.name != "void" and ty.name != "None": hval = self._patch_empty_dict_hint(hval, ty)
                 if ty.name == "void" or ty.name == "None": ty = hir_expr_type(hval)
                 # plain-identifier RHS of non-primitive type = ownership move
                 # Skip for shared lets (shared = clone via refcount, not a move)
@@ -3899,6 +3920,7 @@ extend Sema:
                 mut htgt = self.lower_expr(target)
                 self.in_assign_target = false
                 mut hv = self.lower_expr(val)
+                hv = self._patch_empty_dict_hint(hv, hir_expr_type(htgt))
                 # [L-5] (--strict): storing freshly-built (owned) data into a `ref`
                 # (borrow) field — the field is meant to hold a borrow, not own.
                 if self.strict_mode and target as usize != 0 as usize:

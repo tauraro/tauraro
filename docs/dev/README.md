@@ -22,6 +22,7 @@ Documentation](../std/README.md) instead.
 | 07 | [MIR Ownership Plan](07_mir_ownership_plan.md) | The sound interprocedural consumes-fixpoint ownership analysis (retiring heuristics) |
 | 08 | [Runtime Tiers & Freestanding](08_runtime_tiers_and_freestanding.md) | `TAURARO_KERNEL`/`NO_LIBC`/`NO_THREADS`/`NO_NET` tiers, bare-metal builds |
 | 09 | [GPU Kernel Backend](09_gpu_backend.md) | `@kernel` → LLVM IR → PTX/SPIR-V (`src/codegen/gpu`), the host→GPU deltas, runtime loading, validation |
+| 10 | [Wrapping C/C++ Libraries](10_wrapping_c_cpp_libraries.md) | Zero-manual-link packages around an existing C/C++ library — vendoring the source vs. binding a system-installed library via `pkg-config`, then distributing either with `taupkg` |
 
 ---
 
@@ -29,6 +30,7 @@ Documentation](../std/README.md) instead.
 
 **New compiler contributor:** 01 → 02 → 03 → 04 → 06
 **Library author (taupkg):** 05 → 03 (for memory rules) → 06
+**Wrapping a C/C++ library:** 10 → [24 — Bindgen](../lang/24_bindgen.md) → 05
 **Fixing a specific bug:** jump to 06 first to check if it's a known pitfall, then 01/03/04 for the relevant subsystem
 
 ---

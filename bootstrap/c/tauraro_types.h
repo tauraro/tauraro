@@ -3760,6 +3760,7 @@ __attribute__((hot)) bool Sema_expr_is_borrow(Sema* self, HirExpr* e);
 __attribute__((hot)) bool Sema__expr_is_shared(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_check_spawn_sendable(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_check_class_sendable_fields(Sema* self, ClassDef* c);
+__attribute__((hot)) HirExpr* Sema__patch_empty_dict_hint(Sema* self, HirExpr* hv, AstType* hint_ty);
 __attribute__((hot)) void Sema_mark_moved(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_mark_freed(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_check_not_moved(Sema* self, TrStr name, TrStr ty_name);

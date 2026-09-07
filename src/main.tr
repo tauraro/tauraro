@@ -259,12 +259,23 @@ pub def auto_link_cpp_shims(mod_file_paths: Vec[str], build_dir: str, cc: str,
                     print(c_yellow("warning") + ": shim '" + shim + "' referenced by " + trpath + " not found; link it manually with --link")
                     continue
             mut shim_txt = read_file(shim_src)
-            # A plain C source (`.c` WITHOUT `extern "C"`) is a hand-vendored C
-            # library dropped next to the bindings — compile it with the C driver
-            # so its functions keep their unmangled C-ABI names. A `.c` that DOES
-            # contain `extern "C"` is a generated shim meant for C++ (the `--macros`
-            # shim), and `.cpp`/`.cc`/`.cxx` are C++; both go through the C++ driver.
-            mut is_c_only = shim_src.ends_with(".c") and not shim_txt.contains("extern \"C\"")
+            # A plain C source (`.c` WITHOUT an UNCONDITIONAL `extern "C"`) is a
+            # hand-vendored C library dropped next to the bindings — compile it
+            # with the C driver so its functions keep their unmangled C-ABI names.
+            # A `.c` that DOES contain an unconditional `extern "C"` is a generated
+            # shim meant for C++ (the `--macros` shim always emits one, unguarded —
+            # see `_gen_macro_shims` in bindgen.tr), and `.cpp`/`.cc`/`.cxx` are C++;
+            # both of those go through the C++ driver.
+            #
+            # Real-world vendored C libraries (e.g. SQLite's amalgamation) commonly
+            # wrap their own `extern "C" { ... }` in `#ifdef __cplusplus` so the same
+            # file compiles standalone under a C++ consumer too — that guarded form
+            # is NOT a signal the shim itself requires a C++ compiler; compiling such
+            # a file with g++ instead of gcc trips real errors deep in unrelated code
+            # (C's implicit `void*` conversions are invalid in C++). Treat a file as
+            # C++-required only when `extern "C"` appears with no `__cplusplus` guard
+            # anywhere in the file.
+            mut is_c_only = shim_src.ends_with(".c") and (not shim_txt.contains("extern \"C\"") or shim_txt.contains("__cplusplus"))
             if not seen.contains(shim_src):
                 seen.insert(shim_src, true)
                 # compile once, cached by shim source content (build/<base>.o + .src sidecar)

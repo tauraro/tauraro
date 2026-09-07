@@ -181,3 +181,7 @@ returns whatever it declares. See `tests/gpu/device_fn.tr`.
 ## Roadmap
 
 - `__local` shared memory with `gpu_barrier`.
+
+---
+
+Previous: [Best Practices & Pitfalls ←](06_best_practices_pitfalls.md) · Next: [Wrapping C/C++ Libraries →](10_wrapping_c_cpp_libraries.md)
