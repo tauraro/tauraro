@@ -3518,7 +3518,20 @@ _TR_GLOBAL int    _tr_argc;
 _TR_GLOBAL char** _tr_argv;
 
 static inline long long _tr_get_argc(void)       { return (long long)_tr_argc; }
-static inline char*     _tr_get_arg(long long n) { return (_tr_argv && n >= 0 && (int)n < _tr_argc) ? _tr_argv[(int)n] : (char*)""; }
+/* Codegen uniformly wraps every `-> str` extern result as OWNED (rc=1,
+ * _tr_str_wrap) and frees it via auto-drop (see _tr_str_dup_owned's own
+ * comment above) -- but argv[n] is a borrowed pointer into the process's
+ * real argv array (owned by the CRT startup code, never malloc'd by
+ * Tauraro's allocator). Wrapping it directly as if owned, then later
+ * releasing it, calls free() on memory nothing here allocated: a genuine
+ * heap-corruption crash (STATUS_HEAP_CORRUPTION on Windows), observed via
+ * `Vec[str]().push(_tr_get_arg(i))` or equivalent -- any use that hoists a
+ * release-on-drop temp around the call, not just an assignment to a plain
+ * local (which happens to outlive the corruption long enough to print
+ * correctly once, masking the bug). _tr_str_dup_owned makes a real copy so
+ * the later free() is valid, matching every other `-> str` helper's contract
+ * (_tr_platform, _tr_cwd, etc.) instead of carving out a special case here. */
+static inline char*     _tr_get_arg(long long n) { return _tr_str_dup_owned((_tr_argv && n >= 0 && (int)n < _tr_argc) ? _tr_argv[(int)n] : ""); }
 
 /* ── TaskGroup: spawn threads + join all (dynamic, unlimited) ────────── */
 typedef struct { _TrThread* ths; int count; int cap; } _TrTaskGroup;

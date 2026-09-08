@@ -13,6 +13,8 @@ extern "C":
     def _tr_popen_read(cmd: str) -> str
     def _tr_getpid() -> int
     def _tr_is_windows() -> bool
+    def _tr_get_argc() -> int
+    def _tr_get_arg(n: int) -> str
 
 pub class OS:
     _dummy: int
@@ -73,6 +75,21 @@ extend OS:
     # Current process identifier.
     pub def getpid() -> int:
         return _tr_getpid()
+
+    # ── Command-line arguments ────────────────────────────────────────────────
+
+    # All command-line arguments, including argv[0] (the program path). For
+    # user arguments only, slice from index 1 -- there is no separate
+    # user-args helper here; use Env (std.sys.env) if you also need
+    # environment-variable access or the module search path.
+    pub def args() -> Vec[str]:
+        mut n = _tr_get_argc()
+        mut result = Vec[str].init(n)
+        mut i = 0
+        while i < n:
+            result.push(_tr_get_arg(i))
+            i = i + 1
+        return result
 
     # ── Path separator ────────────────────────────────────────────────────────
 

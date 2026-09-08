@@ -525,6 +525,16 @@ pub def target_extra_flags(triple: str) -> str:
         return " -DTAURARO_WASM=1"
     # Windows cross (MinGW): statically link runtime so no DLL deps
     if _tr_str_contains(triple, "mingw"): return " -static"
+    # UEFI (PE/COFF, same x64 ABI as Windows): a function whose locals cross a
+    # 4KB frame gets a stack-probe call to __chkstk (the MS x64 ABI's guard-
+    # page-touching helper for large frames) -- normal on Windows, where the
+    # CRT supplies it, but UEFI is freestanding with no CRT, so the link fails
+    # with "undefined symbol: __chkstk" naming a symbol absent from the user's
+    # source (see bugs.txt #2). -mno-stack-arg-probe tells the C compiler not
+    # to emit those calls at all; UEFI firmware's own stack is sized generously
+    # enough upfront that the guard-page probing this disables was never doing
+    # useful work here anyway (there's no growable/guarded stack to protect).
+    if _tr_str_contains(triple, "unknown-uefi"): return " -mno-stack-arg-probe"
     return ""
 
 # Detect the best compiler for cross-compilation to a given triple.
@@ -2196,7 +2206,15 @@ pub def main(args: Vec[str]):
         # branch (windows.h/psapi/bcrypt) -- it already gates that on
         # !TAURARO_BARE, and --freestanding implies TAURARO_BARE, but a stale
         # runtime header without that gate would otherwise fail to compile.
-        uefi_cmd = uefi_cmd + " -cflags -U_WIN32 -U_WIN64 -U_MSC_VER -- "
+        # -mno-stack-arg-probe: without it, a function whose locals cross a 4KB
+        # frame gets a stack-probe call to __chkstk (the MS x64 ABI's guard-
+        # page helper for large frames, normal on hosted Windows where the CRT
+        # supplies it) -- but UEFI is freestanding with no CRT, so the link
+        # fails with "undefined symbol: __chkstk" naming a symbol absent from
+        # the user's own source (bugs.txt #2). UEFI firmware's own stack is
+        # sized generously upfront, so the guard-page probing this disables
+        # was never doing useful work here anyway.
+        uefi_cmd = uefi_cmd + " -cflags -U_WIN32 -U_WIN64 -U_MSC_VER -mno-stack-arg-probe -- "
         mut uci = 0
         while uci < all_c_files.len:
             uefi_cmd = uefi_cmd + "\"" + all_c_files.get(uci) + "\" "

@@ -451,6 +451,8 @@ __attribute__((hot)) Token Lexer_read_string(Lexer* self, long long quote) {
                 StringBuilder_append_char(sb, 0LL);
             } else {
                 /* pass */
+                StringBuilder_append_char(sb, 92LL);
+                /* pass */
                 StringBuilder_append_char(sb, esc);
             }
         } else {
@@ -619,6 +621,8 @@ __attribute__((hot)) Token Lexer_read_byte_string(Lexer* self) {
                 /* pass */
                 StringBuilder_append_char(sb, 0LL);
             } else {
+                /* pass */
+                StringBuilder_append_char(sb, 92LL);
                 /* pass */
                 StringBuilder_append_char(sb, esc);
             }

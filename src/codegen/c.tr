@@ -1396,11 +1396,39 @@ pub class CGenerator:
         mut nm = f.name
         while i < f.decorators.len:
             mut d = f.decorators.get(i).name
-            if d == "allocator": return "#define TAURARO_ALLOC(sz) " + nm + "(sz)\n"
-            if d == "free":      return "#define TAURARO_FREE(p) " + nm + "(p)\n"
-            if d == "realloc":   return "#define TAURARO_REALLOC(p,sz) " + nm + "(p,sz)\n"
-            if d == "calloc":    return "#define TAURARO_CALLOC(n,sz) " + nm + "(n,sz)\n"
-            if d == "output":    return "#define _TR_WRITE(s) " + nm + "(s)\n"
+            # Route through a uniquely-named static-inline wrapper rather than
+            # substituting the user's chosen function name straight into the
+            # macro body. A bare `#define TAURARO_CALLOC(n,sz) c(n,sz)` expands
+            # textually wherever it's used, including e.g.
+            # `_TrChan* c = (_TrChan*)TAURARO_CALLOC(1, sizeof(_TrChan));` in the
+            # runtime -- and C scopes a declared name from its own declarator,
+            # so that `c(...)` in the initializer resolves to the JUST-DECLARED
+            # `_TrChan* c` being called as a function, not the user's hook,
+            # whenever the hook's name collides with any local the runtime
+            # macro happens to expand next to (a one-letter name like `c` is
+            # exactly the case that bites). The wrapper's own tiny, fixed
+            # parameter list has no such local to collide with.
+            #
+            # emit_tier_hooks (this text's caller) is written into BOTH the
+            # shared tauraro_types.h (so every module .c file's runtime
+            # #include sees TAURARO_ALLOC/etc, not just main.c's) AND
+            # directly into main.c's/each module's own body -- harmless
+            # duplication for a plain #define, but a real "redefinition of
+            # <fn>" error for an actual function definition, since both
+            # copies land in the same translation unit once types.h is
+            # #include'd. An #ifndef guard makes the wrapper safe to emit
+            # more than once, the same way a header guard protects a
+            # multiply-#include'd declaration.
+            if d == "allocator":
+                return "#ifndef _TR_HOOK_ALLOC_DEFINED\n#define _TR_HOOK_ALLOC_DEFINED\nstatic inline void* _tr_hook_alloc(unsigned long long sz) { return (void*)" + nm + "(sz); }\n#endif\n#define TAURARO_ALLOC(sz) _tr_hook_alloc(sz)\n"
+            if d == "free":
+                return "#ifndef _TR_HOOK_FREE_DEFINED\n#define _TR_HOOK_FREE_DEFINED\nstatic inline void _tr_hook_free(void* p) { " + nm + "((unsigned char*)p); }\n#endif\n#define TAURARO_FREE(p) _tr_hook_free(p)\n"
+            if d == "realloc":
+                return "#ifndef _TR_HOOK_REALLOC_DEFINED\n#define _TR_HOOK_REALLOC_DEFINED\nstatic inline void* _tr_hook_realloc(void* p, unsigned long long sz) { return (void*)" + nm + "((unsigned char*)p, sz); }\n#endif\n#define TAURARO_REALLOC(p,sz) _tr_hook_realloc(p,sz)\n"
+            if d == "calloc":
+                return "#ifndef _TR_HOOK_CALLOC_DEFINED\n#define _TR_HOOK_CALLOC_DEFINED\nstatic inline void* _tr_hook_calloc(unsigned long long n, unsigned long long sz) { return (void*)" + nm + "(n, sz); }\n#endif\n#define TAURARO_CALLOC(n,sz) _tr_hook_calloc(n,sz)\n"
+            if d == "output":
+                return "#ifndef _TR_HOOK_OUTPUT_DEFINED\n#define _TR_HOOK_OUTPUT_DEFINED\nstatic inline void _tr_hook_output(const char* s) { " + nm + "((char*)s); }\n#endif\n#define _TR_WRITE(s) _tr_hook_output(s)\n"
             i = i + 1
         return ""
 
@@ -1949,7 +1977,6 @@ pub class CGenerator:
                 if self.closure_env_var != "" and self.closure_cap_set.contains(n):
                     return "(*(__env->p_" + _safe_c_varname(n) + "))"
                 if _is_c_keyword(n) and self.decl_vars.contains(n): return "_tr_v_" + n
-                if n == "argv" and self.cur_func == "main": return "_tr_main_argv"
                 # A top-level function used as a value (not a call target) is a
                 # zero-cost TrFnVal: its address as .fn, NULL .env (bare function,
                 # not a closure -- see gen_call's dispatch on .env).
@@ -5339,8 +5366,30 @@ pub class CGenerator:
                     mut _ael = self.obj_retain_wrap(args.get(0), self.gen_expr(args.get(0)), false)
                     if self._obj_store_needs_retain(args.get(0)): _ael = "_tr_obj_retain(" + _ael + ")"
                     return "List_" + lsfx + "_append(" + obj_s + ", " + _ael + ")"
-                mut append_args = self.gen_args_strify(args, elem_sfx)
-                if lsfx == "TrStr": append_args = self.gen_args(args)
+                # Call gen_args_strify ONLY when its result is actually used.
+                # gen_args_strify has a side effect for a str-typed arg: it
+                # runs the argument expression through strz(), which (for a
+                # fresh, non-local str like a direct extern-call result)
+                # hoists it into its OWN wrap-temp via the shared
+                # wrap_temp_decls/wrap_temp_names state. Calling it and then
+                # discarding the result (the old code always called it, then
+                # overwrote append_args below when lsfx=="TrStr") still left
+                # that hoisted temp behind: the argument expression got
+                # generated a SECOND time by gen_args()/gen_args_casts right
+                # after, hoisting a SECOND, independent wrap-temp for the same
+                # underlying pointer. Both temps got released at the end of
+                # the statement, so a value like `_tr_get_arg(i)` (wraps a
+                # borrowed char* into a fresh TrStr each time it's evaluated)
+                # was wrapped and released TWICE for one logical argument —
+                # a genuine use-after-free once the List's own retained copy
+                # aliased memory a sibling temp had already freed. Observed as
+                # `Vec[str]().push(_tr_get_arg(i))` silently corrupting the
+                # string it stored.
+                mut append_args = ""
+                if lsfx == "TrStr":
+                    append_args = self.gen_args(args)
+                else:
+                    append_args = self.gen_args_strify(args, elem_sfx)
                 return "List_" + lsfx + "_append(" + obj_s + ", " + append_args + ")"
             if method == "free": return "List_" + lsfx + "_free(" + obj_s + ")"
             if method == "pop":
@@ -5351,12 +5400,20 @@ pub class CGenerator:
                         return "((" + call_ty.name + "*)" + pop_r + ")"
                 return pop_r
             if method == "set":
-                mut set_args = self.gen_args_strify(args, elem_sfx)
-                if lsfx == "TrStr": set_args = self.gen_args(args)
+                # Same discarded-side-effect hazard as push/append above.
+                mut set_args = ""
+                if lsfx == "TrStr":
+                    set_args = self.gen_args(args)
+                else:
+                    set_args = self.gen_args_strify(args, elem_sfx)
                 return "List_" + lsfx + "_set(" + obj_s + ", " + set_args + ")"
             if method == "contains":
-                mut contains_args = self.gen_args_strify(args, elem_sfx)
-                if lsfx == "TrStr": contains_args = self.gen_args(args)
+                # Same discarded-side-effect hazard as push/append above.
+                mut contains_args = ""
+                if lsfx == "TrStr":
+                    contains_args = self.gen_args(args)
+                else:
+                    contains_args = self.gen_args_strify(args, elem_sfx)
                 return "List_" + lsfx + "_contains(" + obj_s + ", " + contains_args + ")"
             if method == "get":
                 mut get_r = "List_" + lsfx + "_get(" + obj_s + ", " + self.gen_args(args) + ")"
@@ -5386,8 +5443,12 @@ pub class CGenerator:
             if method == "extend":
                 return "List_" + lsfx + "_extend(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "index_of":
-                mut idx_args = self.gen_args_strify(args, elem_sfx)
-                if lsfx == "TrStr": idx_args = self.gen_args(args)
+                # Same discarded-side-effect hazard as push/append above.
+                mut idx_args = ""
+                if lsfx == "TrStr":
+                    idx_args = self.gen_args(args)
+                else:
+                    idx_args = self.gen_args_strify(args, elem_sfx)
                 return "List_" + lsfx + "_index_of(" + obj_s + ", " + idx_args + ")"
             if method == "count" and args.len > 0:
                 if lsfx == "TrStr":
@@ -8815,6 +8876,17 @@ pub class CGenerator:
             i = i + 1
 
         # -- Free-standing function implementations -------------------
+        # A freestanding target (--freestanding, TAURARO_KERNEL) has no libc
+        # _start/main calling into the program -- a `pub export def` is called
+        # DIRECTLY by an external host (a zig UEFI stub, a JS wasm host), so
+        # `main()`'s own top-level-statement loop below (which runs global
+        # initializers) never executes. Without this, every module-level
+        # `mut x = ...` keeps its zeroed BSS value forever: silently wrong for
+        # a non-zero scalar default, a null-pointer crash for a class instance
+        # (see bugs.txt #1). One shared, run-once guard covers every exported
+        # function regardless of which one the host happens to call first.
+        if self.tier_define == "TAURARO_KERNEL":
+            self.w("static int _tr_export_globals_done = 0;\n")
         i = 0
         while i < prog.functions.len:
             mut f = prog.functions.get(i)
@@ -8844,6 +8916,11 @@ pub class CGenerator:
                     self.shared_vars = Map[str, str].init(8)
                     self.seed_params(f)
                     self.w(self.get_inline_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
+                    if f.is_export and self.tier_define == "TAURARO_KERNEL":
+                        self.w("    if (!_tr_export_globals_done) {\n")
+                        self.w("        _tr_export_globals_done = 1;\n")
+                        self.emit_global_inits(prog)
+                        self.w("    }\n")
                     self.gen_func_body(f.body, 1)
                     self.w("}\n\n")
                     self.cur_func  = ""
@@ -8853,8 +8930,12 @@ pub class CGenerator:
 
         # -- C main entry point ---------------------------------------
         self.emit_entry_glue(prog)
-        self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
-        self.w("    _tr_argc = argc; _tr_argv = argv;\n")
+        self.w("__attribute__((hot)) int main(int _tr_c_argc, char** _tr_c_argv) {\n")
+        # C-level params renamed to _tr_c_argc/_tr_c_argv (from plain argc/argv)
+        # so a Tauraro `main()` that declares its own local named argc/argv
+        # (a natural name to pick when reading OS.args()) does not collide
+        # with this function's own C parameters in the same scope.
+        self.w("    _tr_argc = _tr_c_argc; _tr_argv = _tr_c_argv;\n")
         self.w("    _tr_init_console();\n")
         # NOTE: the global async pool is created LAZILY on first use (see
         # _tr_async_pool() in the runtime). Eagerly spawning one worker thread
@@ -8871,10 +8952,11 @@ pub class CGenerator:
                 main_args_name = mf.params.get(0).name
             mi2 = mi2 + 1
         if main_has_args:
-            # Rename to avoid shadowing C's char** argv parameter
-            if main_args_name == "argv": main_args_name = "_tr_main_argv"
+            # No rename needed: the C main() itself now takes _tr_c_argc/
+            # _tr_c_argv (not argc/argv), so a Tauraro `main(argv: List[str])`
+            # parameter no longer collides with anything in main's own C scope.
             self.w("    List_TrStr* " + main_args_name + " = List_TrStr_new();\n")
-            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(argv[_ai])); }\n")
+            self.w("    for (int _ai = 0; _ai < _tr_c_argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(_tr_c_argv[_ai])); }\n")
 
         # Call top-level statements. A hoisted global var (declared at file scope
         # at file scope) is initialized here with an assignment, not re-declared.
@@ -9621,6 +9703,14 @@ pub class CGenerator:
                 gvi2 = gvi2 + 1
 
         # Main-module free-standing function implementations
+        # See the sibling loop in generate()'s copy of this same shape for the
+        # full rationale (bugs.txt #1): a freestanding `pub export def` is
+        # called directly by an external host, so main()'s own top-level-
+        # statement pass below (which runs global initializers) never
+        # executes for it. One shared, run-once guard, triggered from
+        # whichever exported function the host happens to call first.
+        if self.tier_define == "TAURARO_KERNEL":
+            self.w("static int _tr_export_globals_done = 0;\n")
         i = 0
         if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.functions as usize):
             while i < prog.functions.len:
@@ -9655,6 +9745,11 @@ pub class CGenerator:
                                 self.seed_params(f)
                                 self.cur_self_is_ptr = f.class_name != "" and self.value_types.contains(f.class_name) and self.vt_method_mutates_self(f)
                                 self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
+                                if f.is_export and self.tier_define == "TAURARO_KERNEL":
+                                    self.w("    if (!_tr_export_globals_done) {\n")
+                                    self.w("        _tr_export_globals_done = 1;\n")
+                                    self.emit_global_inits(prog)
+                                    self.w("    }\n")
                                 self.gen_func_body(f.body, 1)
                                 self.cur_self_is_ptr = false
                                 self.w("}\n\n")
@@ -9665,8 +9760,12 @@ pub class CGenerator:
 
         # C main() entry point
         self.emit_entry_glue(prog)
-        self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
-        self.w("    _tr_argc = argc; _tr_argv = argv;\n")
+        self.w("__attribute__((hot)) int main(int _tr_c_argc, char** _tr_c_argv) {\n")
+        # C-level params renamed to _tr_c_argc/_tr_c_argv (from plain argc/argv)
+        # so a Tauraro `main()` that declares its own local named argc/argv
+        # (a natural name to pick when reading OS.args()) does not collide
+        # with this function's own C parameters in the same scope.
+        self.w("    _tr_argc = _tr_c_argc; _tr_argv = _tr_c_argv;\n")
         self.w("    _tr_init_console();\n")
         # NOTE: the global async pool is created LAZILY on first use (see
         # _tr_async_pool() in the runtime). Eagerly spawning one worker thread
@@ -9684,10 +9783,11 @@ pub class CGenerator:
                         main_args_name = mf.params.get(0).name
                 mi2 = mi2 + 1
         if main_has_args:
-            # Rename to avoid shadowing C's char** argv parameter
-            if main_args_name == "argv": main_args_name = "_tr_main_argv"
+            # No rename needed: the C main() itself now takes _tr_c_argc/
+            # _tr_c_argv (not argc/argv), so a Tauraro `main(argv: List[str])`
+            # parameter no longer collides with anything in main's own C scope.
             self.w("    List_TrStr* " + main_args_name + " = List_TrStr_new();\n")
-            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(argv[_ai])); }\n")
+            self.w("    for (int _ai = 0; _ai < _tr_c_argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(_tr_c_argv[_ai])); }\n")
 
         i = 0
         if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.top_level_stmts as usize):
