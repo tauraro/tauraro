@@ -6,6 +6,8 @@ extern "C":
     def _tr_cpu_count() -> int
     def _tr_cwd() -> str
     def _tr_chdir(path: str) -> int
+    def _tr_mkdir(path: str) -> int
+    def _tr_dir_exists(path: str) -> bool
     def _tr_platform() -> str
     def _tr_os_machine() -> str
     def _tr_memory_total_mb() -> int
@@ -61,6 +63,15 @@ extend OS:
     # Change the current working directory.  Returns true on success.
     pub def chdir(path: str) -> bool:
         return _tr_chdir(path) == 0
+
+    # Create a directory at path.  Returns true on success OR if a directory
+    # already exists there (mkdir(2)/CreateDirectoryA both fail on an
+    # existing path, which is rarely what a caller wants -- see std.io.dir's
+    # Dir.make(), whose same "already there is fine" convention this
+    # mirrors, for a caller that also wants list()/remove() on that path).
+    pub def mkdir(path: str) -> bool:
+        if _tr_dir_exists(path): return true
+        return _tr_mkdir(path) == 0
 
     # ── Process execution ─────────────────────────────────────────────────────
 

@@ -117,7 +117,7 @@ __attribute__((hot)) void GpuEmitter_add_var(GpuEmitter* self, TrStr name, AstTy
         /* pass */
         List_TrStr_append(self->var_names, name);
         /* pass */
-        ({ TrStr _at_t3337 = (_gpu_scalar_ty(ty->name)); List_TrStr_append(self->var_ll, _at_t3337); _tr_str_release(_at_t3337); });
+        ({ TrStr _at_t3398 = (_gpu_scalar_ty(ty->name)); List_TrStr_append(self->var_ll, _at_t3398); _tr_str_release(_at_t3398); });
         /* pass */
         List_TrStr_append(self->var_elem, _tr_str_lit(""));
     }
@@ -171,15 +171,15 @@ __attribute__((hot)) void GpuEmitter_scan_vars_block(GpuEmitter* self, HirBlock*
 
 __attribute__((hot)) void GpuEmitter_scan_vars_stmt(GpuEmitter* self, HirStmt s) {
     /* pass */
-    __auto_type _t3338 = s;
-    if (_t3338.tag == HirStmt_SLet) {
-        __auto_type name = _t3338.data.SLet.name;
-__auto_type ownership = _t3338.data.SLet.ownership;
-__auto_type is_mut = _t3338.data.SLet.is_mut;
-__auto_type is_const = _t3338.data.SLet.is_const;
-__auto_type is_shared = _t3338.data.SLet.is_shared;
-__auto_type ty = _t3338.data.SLet.ty;
-__auto_type val = _t3338.data.SLet.val;
+    __auto_type _t3399 = s;
+    if (_t3399.tag == HirStmt_SLet) {
+        __auto_type name = _t3399.data.SLet.name;
+__auto_type ownership = _t3399.data.SLet.ownership;
+__auto_type is_mut = _t3399.data.SLet.is_mut;
+__auto_type is_const = _t3399.data.SLet.is_const;
+__auto_type is_shared = _t3399.data.SLet.is_shared;
+__auto_type ty = _t3399.data.SLet.ty;
+__auto_type val = _t3399.data.SLet.val;
         /* pass */
         AstType* vt = ty;
         /* pass */
@@ -189,25 +189,25 @@ __auto_type val = _t3338.data.SLet.val;
         }
         /* pass */
         GpuEmitter_add_var(self, name, vt);
-    } else if (_t3338.tag == HirStmt_SIf) {
-        __auto_type cond = _t3338.data.SIf.cond;
-__auto_type then_b = _t3338.data.SIf.then_b;
-__auto_type else_b = _t3338.data.SIf.else_b;
+    } else if (_t3399.tag == HirStmt_SIf) {
+        __auto_type cond = _t3399.data.SIf.cond;
+__auto_type then_b = _t3399.data.SIf.then_b;
+__auto_type else_b = _t3399.data.SIf.else_b;
         /* pass */
         GpuEmitter_scan_vars_block(self, then_b);
         /* pass */
         GpuEmitter_scan_vars_block(self, else_b);
-    } else if (_t3338.tag == HirStmt_SWhile) {
-        __auto_type cond = _t3338.data.SWhile.cond;
-__auto_type body = _t3338.data.SWhile.body;
+    } else if (_t3399.tag == HirStmt_SWhile) {
+        __auto_type cond = _t3399.data.SWhile.cond;
+__auto_type body = _t3399.data.SWhile.body;
         /* pass */
         GpuEmitter_scan_vars_block(self, body);
-    } else if (_t3338.tag == HirStmt_SUnsafe) {
-        __auto_type body = _t3338.data.SUnsafe.body;
+    } else if (_t3399.tag == HirStmt_SUnsafe) {
+        __auto_type body = _t3399.data.SUnsafe.body;
         /* pass */
         GpuEmitter_scan_vars_block(self, body);
     } else if (1) {
-        __auto_type _ = _t3338;
+        __auto_type _ = _t3399;
         /* pass */
         /* pass */
     }
@@ -232,12 +232,12 @@ __attribute__((hot)) TrStr GpuEmitter_emit_kernel(GpuEmitter* self, HirFunction*
     /* pass */
     if ((strcmp(_tr_strz(self->target), _tr_strz(_tr_str_lit("nvptx"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t3339 = _tr_str_lit("ptx_kernel");
+        TrStr _strtmp_t3400 = _tr_str_lit("ptx_kernel");
         _tr_str_release(cc);
-        cc = _strtmp_t3339;
+        cc = _strtmp_t3400;
     }
     /* pass */
-    ({ TrStr _at_t3340 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("define ")), _tr_strz(cc))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" void @"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(f->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3340); _tr_str_release(_at_t3340); });
+    ({ TrStr _at_t3401 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("define ")), _tr_strz(cc))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" void @"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(f->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3401); _tr_str_release(_at_t3401); });
     /* pass */
     long long pj = 0LL;
     /* pass */
@@ -250,7 +250,7 @@ __attribute__((hot)) TrStr GpuEmitter_emit_kernel(GpuEmitter* self, HirFunction*
             GpuEmitter_w(self, _tr_str_lit(", "));
         }
         /* pass */
-        ({ TrStr _at_t3341 = (({ TrStr _cl = (({ TrStr _cl = (GpuEmitter_var_slot_ty(self, pp->name)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" %arg_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pp->name)); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3341); _tr_str_release(_at_t3341); });
+        ({ TrStr _at_t3402 = (({ TrStr _cl = (({ TrStr _cl = (GpuEmitter_var_slot_ty(self, pp->name)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" %arg_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pp->name)); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3402); _tr_str_release(_at_t3402); });
         /* pass */
         pj = (pj + 1LL);
     }
@@ -261,7 +261,7 @@ __attribute__((hot)) TrStr GpuEmitter_emit_kernel(GpuEmitter* self, HirFunction*
     /* pass */
     while ((vi < self->var_names->len)) {
         /* pass */
-        ({ TrStr _at_t3342 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (List_TrStr_get(self->var_names, vi)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  %var_")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = alloca "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (List_TrStr_get(self->var_ll, vi)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3342); _tr_str_release(_at_t3342); });
+        ({ TrStr _at_t3403 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (List_TrStr_get(self->var_names, vi)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  %var_")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = alloca "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (List_TrStr_get(self->var_ll, vi)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3403); _tr_str_release(_at_t3403); });
         /* pass */
         vi = (vi + 1LL);
     }
@@ -270,11 +270,12 @@ __attribute__((hot)) TrStr GpuEmitter_emit_kernel(GpuEmitter* self, HirFunction*
     /* pass */
     while ((pk < f->params->len)) {
         /* pass */
-        TrStr pn = ((HirParam*)List_ptr_get(f->params, pk))->name;
+        TrStr pn = _tr_str_retain(((HirParam*)List_ptr_get(f->params, pk))->name);
         /* pass */
-        ({ TrStr _at_t3343 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (GpuEmitter_var_slot_ty(self, pn)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  store ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" %arg_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pn)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr %var_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pn)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3343); _tr_str_release(_at_t3343); });
+        ({ TrStr _at_t3404 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (GpuEmitter_var_slot_ty(self, pn)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  store ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" %arg_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pn)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr %var_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pn)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3404); _tr_str_release(_at_t3404); });
         /* pass */
         pk = (pk + 1LL);
+        _tr_str_release(pn);
     }
     /* pass */
     GpuEmitter_emit_block(self, f->body);
@@ -308,7 +309,7 @@ __attribute__((hot)) TrStr GpuEmitter_emit_device_fn(GpuEmitter* self, HirFuncti
     /* pass */
     GpuEmitter_scan_vars_block(self, f->body);
     /* pass */
-    ({ TrStr _at_t3344 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("define ")), _tr_strz(self->ret_llty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" @"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(f->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3344); _tr_str_release(_at_t3344); });
+    ({ TrStr _at_t3405 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("define ")), _tr_strz(self->ret_llty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" @"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(f->name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3405); _tr_str_release(_at_t3405); });
     /* pass */
     long long pj = 0LL;
     /* pass */
@@ -321,7 +322,7 @@ __attribute__((hot)) TrStr GpuEmitter_emit_device_fn(GpuEmitter* self, HirFuncti
             GpuEmitter_w(self, _tr_str_lit(", "));
         }
         /* pass */
-        ({ TrStr _at_t3345 = (({ TrStr _cl = (({ TrStr _cl = (GpuEmitter_var_slot_ty(self, pp->name)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" %arg_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pp->name)); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3345); _tr_str_release(_at_t3345); });
+        ({ TrStr _at_t3406 = (({ TrStr _cl = (({ TrStr _cl = (GpuEmitter_var_slot_ty(self, pp->name)); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" %arg_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pp->name)); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3406); _tr_str_release(_at_t3406); });
         /* pass */
         pj = (pj + 1LL);
     }
@@ -332,7 +333,7 @@ __attribute__((hot)) TrStr GpuEmitter_emit_device_fn(GpuEmitter* self, HirFuncti
     /* pass */
     while ((vi < self->var_names->len)) {
         /* pass */
-        ({ TrStr _at_t3346 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (List_TrStr_get(self->var_names, vi)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  %var_")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = alloca "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (List_TrStr_get(self->var_ll, vi)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3346); _tr_str_release(_at_t3346); });
+        ({ TrStr _at_t3407 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (List_TrStr_get(self->var_names, vi)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  %var_")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = alloca "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (List_TrStr_get(self->var_ll, vi)); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3407); _tr_str_release(_at_t3407); });
         /* pass */
         vi = (vi + 1LL);
     }
@@ -341,11 +342,12 @@ __attribute__((hot)) TrStr GpuEmitter_emit_device_fn(GpuEmitter* self, HirFuncti
     /* pass */
     while ((pk < f->params->len)) {
         /* pass */
-        TrStr pn = ((HirParam*)List_ptr_get(f->params, pk))->name;
+        TrStr pn = _tr_str_retain(((HirParam*)List_ptr_get(f->params, pk))->name);
         /* pass */
-        ({ TrStr _at_t3347 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (GpuEmitter_var_slot_ty(self, pn)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  store ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" %arg_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pn)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr %var_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pn)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3347); _tr_str_release(_at_t3347); });
+        ({ TrStr _at_t3408 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cr = (GpuEmitter_var_slot_ty(self, pn)); TrStr _cres = _tr_strx_concat(_tr_strz(_tr_str_lit("  store ")), _cr.data); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" %arg_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pn)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr %var_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pn)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3408); _tr_str_release(_at_t3408); });
         /* pass */
         pk = (pk + 1LL);
+        _tr_str_release(pn);
     }
     /* pass */
     GpuEmitter_emit_block(self, f->body);
@@ -355,13 +357,13 @@ __attribute__((hot)) TrStr GpuEmitter_emit_device_fn(GpuEmitter* self, HirFuncti
         GpuEmitter_w(self, _tr_str_lit("  ret void\n}\n\n"));
     } else if (_gpu_is_float(self->ret_llty)) {
         /* pass */
-        ({ TrStr _at_t3348 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ret ")), _tr_strz(self->ret_llty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 0.0\n}\n\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3348); _tr_str_release(_at_t3348); });
+        ({ TrStr _at_t3409 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ret ")), _tr_strz(self->ret_llty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 0.0\n}\n\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3409); _tr_str_release(_at_t3409); });
     } else if ((strcmp(_tr_strz(self->ret_llty), _tr_strz(_tr_str_lit("ptr addrspace(1)"))) == 0)) {
         /* pass */
-        ({ TrStr _at_t3349 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ret ")), _tr_strz(self->ret_llty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" null\n}\n\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3349); _tr_str_release(_at_t3349); });
+        ({ TrStr _at_t3410 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ret ")), _tr_strz(self->ret_llty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" null\n}\n\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3410); _tr_str_release(_at_t3410); });
     } else {
         /* pass */
-        ({ TrStr _at_t3350 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ret ")), _tr_strz(self->ret_llty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 0\n}\n\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3350); _tr_str_release(_at_t3350); });
+        ({ TrStr _at_t3411 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ret ")), _tr_strz(self->ret_llty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 0\n}\n\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3411); _tr_str_release(_at_t3411); });
     }
     /* pass */
     if ((!self->ok)) {
@@ -386,15 +388,15 @@ __attribute__((hot)) void GpuEmitter_emit_block(GpuEmitter* self, HirBlock* b) {
 
 __attribute__((hot)) void GpuEmitter_emit_stmt(GpuEmitter* self, HirStmt s) {
     /* pass */
-    __auto_type _t3351 = s;
-    if (_t3351.tag == HirStmt_SLet) {
-        __auto_type name = _t3351.data.SLet.name;
-__auto_type ownership = _t3351.data.SLet.ownership;
-__auto_type is_mut = _t3351.data.SLet.is_mut;
-__auto_type is_const = _t3351.data.SLet.is_const;
-__auto_type is_shared = _t3351.data.SLet.is_shared;
-__auto_type ty = _t3351.data.SLet.ty;
-__auto_type val = _t3351.data.SLet.val;
+    __auto_type _t3412 = s;
+    if (_t3412.tag == HirStmt_SLet) {
+        __auto_type name = _t3412.data.SLet.name;
+__auto_type ownership = _t3412.data.SLet.ownership;
+__auto_type is_mut = _t3412.data.SLet.is_mut;
+__auto_type is_const = _t3412.data.SLet.is_const;
+__auto_type is_shared = _t3412.data.SLet.is_shared;
+__auto_type ty = _t3412.data.SLet.ty;
+__auto_type val = _t3412.data.SLet.val;
         /* pass */
         GVal* v = GpuEmitter_emit_expr(self, val);
         /* pass */
@@ -402,23 +404,23 @@ __auto_type val = _t3351.data.SLet.val;
         /* pass */
         TrStr cv = GpuEmitter_coerce(self, v, slot);
         /* pass */
-        ({ TrStr _at_t3352 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  store ")), _tr_strz(slot))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cv)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr %var_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3352); _tr_str_release(_at_t3352); });
+        ({ TrStr _at_t3413 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  store ")), _tr_strz(slot))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cv)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr %var_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3413); _tr_str_release(_at_t3413); });
         _tr_obj_release(v, _trdrop_GVal);
         _tr_str_release(slot);
         _tr_str_release(cv);
-    } else if (_t3351.tag == HirStmt_SAssign) {
-        __auto_type target = _t3351.data.SAssign.target;
-__auto_type val = _t3351.data.SAssign.val;
+    } else if (_t3412.tag == HirStmt_SAssign) {
+        __auto_type target = _t3412.data.SAssign.target;
+__auto_type val = _t3412.data.SAssign.val;
         /* pass */
         GpuEmitter_emit_assign(self, (*target), val);
-    } else if (_t3351.tag == HirStmt_SExpr) {
-        __auto_type expr = _t3351.data.SExpr.expr;
+    } else if (_t3412.tag == HirStmt_SExpr) {
+        __auto_type expr = _t3412.data.SExpr.expr;
         /* pass */
         GpuEmitter_emit_stmt_expr(self, (*expr));
-    } else if (_t3351.tag == HirStmt_SIf) {
-        __auto_type cond = _t3351.data.SIf.cond;
-__auto_type then_b = _t3351.data.SIf.then_b;
-__auto_type else_b = _t3351.data.SIf.else_b;
+    } else if (_t3412.tag == HirStmt_SIf) {
+        __auto_type cond = _t3412.data.SIf.cond;
+__auto_type then_b = _t3412.data.SIf.then_b;
+__auto_type else_b = _t3412.data.SIf.else_b;
         /* pass */
         GVal* c = GpuEmitter_emit_expr(self, cond);
         /* pass */
@@ -430,29 +432,29 @@ __auto_type else_b = _t3351.data.SIf.else_b;
         /* pass */
         TrStr lend = GpuEmitter_newlbl(self);
         /* pass */
-        ({ TrStr _at_t3353 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  br i1 ")), _tr_strz(cc))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", label %"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lt)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", label %"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(le)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3353); _tr_str_release(_at_t3353); });
+        ({ TrStr _at_t3414 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  br i1 ")), _tr_strz(cc))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", label %"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lt)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", label %"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(le)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3414); _tr_str_release(_at_t3414); });
         /* pass */
-        ({ TrStr _at_t3354 = (_tr_strx_concat(_tr_strz(lt), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3354); _tr_str_release(_at_t3354); });
+        ({ TrStr _at_t3415 = (_tr_strx_concat(_tr_strz(lt), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3415); _tr_str_release(_at_t3415); });
         /* pass */
         GpuEmitter_emit_block(self, then_b);
         /* pass */
-        ({ TrStr _at_t3355 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  br label %")), _tr_strz(lend))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3355); _tr_str_release(_at_t3355); });
+        ({ TrStr _at_t3416 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  br label %")), _tr_strz(lend))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3416); _tr_str_release(_at_t3416); });
         /* pass */
-        ({ TrStr _at_t3356 = (_tr_strx_concat(_tr_strz(le), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3356); _tr_str_release(_at_t3356); });
+        ({ TrStr _at_t3417 = (_tr_strx_concat(_tr_strz(le), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3417); _tr_str_release(_at_t3417); });
         /* pass */
         GpuEmitter_emit_block(self, else_b);
         /* pass */
-        ({ TrStr _at_t3357 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  br label %")), _tr_strz(lend))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3357); _tr_str_release(_at_t3357); });
+        ({ TrStr _at_t3418 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  br label %")), _tr_strz(lend))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3418); _tr_str_release(_at_t3418); });
         /* pass */
-        ({ TrStr _at_t3358 = (_tr_strx_concat(_tr_strz(lend), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3358); _tr_str_release(_at_t3358); });
+        ({ TrStr _at_t3419 = (_tr_strx_concat(_tr_strz(lend), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3419); _tr_str_release(_at_t3419); });
         _tr_obj_release(c, _trdrop_GVal);
         _tr_str_release(cc);
         _tr_str_release(lt);
         _tr_str_release(le);
         _tr_str_release(lend);
-    } else if (_t3351.tag == HirStmt_SWhile) {
-        __auto_type cond = _t3351.data.SWhile.cond;
-__auto_type body = _t3351.data.SWhile.body;
+    } else if (_t3412.tag == HirStmt_SWhile) {
+        __auto_type cond = _t3412.data.SWhile.cond;
+__auto_type body = _t3412.data.SWhile.body;
         /* pass */
         TrStr lc = GpuEmitter_newlbl(self);
         /* pass */
@@ -460,34 +462,34 @@ __auto_type body = _t3351.data.SWhile.body;
         /* pass */
         TrStr lend2 = GpuEmitter_newlbl(self);
         /* pass */
-        ({ TrStr _at_t3359 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  br label %")), _tr_strz(lc))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3359); _tr_str_release(_at_t3359); });
+        ({ TrStr _at_t3420 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  br label %")), _tr_strz(lc))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3420); _tr_str_release(_at_t3420); });
         /* pass */
-        ({ TrStr _at_t3360 = (_tr_strx_concat(_tr_strz(lc), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3360); _tr_str_release(_at_t3360); });
+        ({ TrStr _at_t3421 = (_tr_strx_concat(_tr_strz(lc), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3421); _tr_str_release(_at_t3421); });
         /* pass */
         GVal* cnd = GpuEmitter_emit_expr(self, cond);
         /* pass */
         TrStr cb = GpuEmitter_coerce_bool(self, cnd);
         /* pass */
-        ({ TrStr _at_t3361 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  br i1 ")), _tr_strz(cb))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", label %"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lb)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", label %"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lend2)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3361); _tr_str_release(_at_t3361); });
+        ({ TrStr _at_t3422 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  br i1 ")), _tr_strz(cb))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", label %"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lb)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", label %"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(lend2)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3422); _tr_str_release(_at_t3422); });
         /* pass */
-        ({ TrStr _at_t3362 = (_tr_strx_concat(_tr_strz(lb), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3362); _tr_str_release(_at_t3362); });
+        ({ TrStr _at_t3423 = (_tr_strx_concat(_tr_strz(lb), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3423); _tr_str_release(_at_t3423); });
         /* pass */
         GpuEmitter_emit_block(self, body);
         /* pass */
-        ({ TrStr _at_t3363 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  br label %")), _tr_strz(lc))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3363); _tr_str_release(_at_t3363); });
+        ({ TrStr _at_t3424 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  br label %")), _tr_strz(lc))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3424); _tr_str_release(_at_t3424); });
         /* pass */
-        ({ TrStr _at_t3364 = (_tr_strx_concat(_tr_strz(lend2), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3364); _tr_str_release(_at_t3364); });
+        ({ TrStr _at_t3425 = (_tr_strx_concat(_tr_strz(lend2), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3425); _tr_str_release(_at_t3425); });
         _tr_str_release(lc);
         _tr_str_release(lb);
         _tr_str_release(lend2);
         _tr_obj_release(cnd, _trdrop_GVal);
         _tr_str_release(cb);
-    } else if (_t3351.tag == HirStmt_SUnsafe) {
-        __auto_type body = _t3351.data.SUnsafe.body;
+    } else if (_t3412.tag == HirStmt_SUnsafe) {
+        __auto_type body = _t3412.data.SUnsafe.body;
         /* pass */
         GpuEmitter_emit_block(self, body);
-    } else if (_t3351.tag == HirStmt_SReturn) {
-        __auto_type val = _t3351.data.SReturn.val;
+    } else if (_t3412.tag == HirStmt_SReturn) {
+        __auto_type val = _t3412.data.SReturn.val;
         /* pass */
         if (((strcmp(_tr_strz(self->ret_llty), _tr_strz(_tr_str_lit("void"))) == 0) || (((unsigned long long)(val)) == ((unsigned long long)(0LL))))) {
             /* pass */
@@ -498,28 +500,28 @@ __auto_type body = _t3351.data.SWhile.body;
             /* pass */
             if ((strcmp(_tr_strz(self->ret_llty), _tr_strz(_tr_str_lit("ptr addrspace(1)"))) == 0)) {
                 /* pass */
-                ({ TrStr _at_t3365 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ret ptr addrspace(1) ")), _tr_strz(rv->val))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3365); _tr_str_release(_at_t3365); });
+                ({ TrStr _at_t3426 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ret ptr addrspace(1) ")), _tr_strz(rv->val))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3426); _tr_str_release(_at_t3426); });
             } else {
                 /* pass */
                 TrStr cv = GpuEmitter_coerce(self, rv, self->ret_llty);
                 /* pass */
-                ({ TrStr _at_t3366 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ret ")), _tr_strz(self->ret_llty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cv)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3366); _tr_str_release(_at_t3366); });
+                ({ TrStr _at_t3427 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ret ")), _tr_strz(self->ret_llty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cv)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3427); _tr_str_release(_at_t3427); });
             }
         }
         /* pass */
         TrStr lu = GpuEmitter_newlbl(self);
         /* pass */
-        ({ TrStr _at_t3367 = (_tr_strx_concat(_tr_strz(lu), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3367); _tr_str_release(_at_t3367); });
+        ({ TrStr _at_t3428 = (_tr_strx_concat(_tr_strz(lu), _tr_strz(_tr_str_lit(":\n")))); GpuEmitter_w(self, _at_t3428); _tr_str_release(_at_t3428); });
         _tr_str_release(lu);
-    } else if (_t3351.tag == HirStmt_SPass) {
+    } else if (_t3412.tag == HirStmt_SPass) {
         /* pass */
         /* pass */
-    } else if (_t3351.tag == HirStmt_SLineMarker) {
-        __auto_type n = _t3351.data.SLineMarker.n;
+    } else if (_t3412.tag == HirStmt_SLineMarker) {
+        __auto_type n = _t3412.data.SLineMarker.n;
         /* pass */
         /* pass */
     } else if (1) {
-        __auto_type _ = _t3351;
+        __auto_type _ = _t3412;
         /* pass */
         GpuEmitter_fail(self, _tr_str_lit("unsupported statement in kernel"));
     }
@@ -527,11 +529,11 @@ __auto_type body = _t3351.data.SWhile.body;
 
 __attribute__((hot)) void GpuEmitter_emit_assign(GpuEmitter* self, HirExpr target, HirExpr* val) {
     /* pass */
-    __auto_type _t3368 = target;
-    if (_t3368.tag == HirExpr_EIdent) {
-        __auto_type name = _t3368.data.EIdent.name;
-__auto_type ty = _t3368.data.EIdent.ty;
-__auto_type is_move = _t3368.data.EIdent.is_move;
+    __auto_type _t3429 = target;
+    if (_t3429.tag == HirExpr_EIdent) {
+        __auto_type name = _t3429.data.EIdent.name;
+__auto_type ty = _t3429.data.EIdent.ty;
+__auto_type is_move = _t3429.data.EIdent.is_move;
         /* pass */
         GVal* v = GpuEmitter_emit_expr(self, val);
         /* pass */
@@ -539,12 +541,12 @@ __auto_type is_move = _t3368.data.EIdent.is_move;
         /* pass */
         TrStr cv = GpuEmitter_coerce(self, v, slot);
         /* pass */
-        ({ TrStr _at_t3369 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  store ")), _tr_strz(slot))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cv)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr %var_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3369); _tr_str_release(_at_t3369); });
+        ({ TrStr _at_t3430 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  store ")), _tr_strz(slot))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cv)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr %var_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3430); _tr_str_release(_at_t3430); });
         _tr_obj_release(v, _trdrop_GVal);
         _tr_str_release(slot);
         _tr_str_release(cv);
     } else if (1) {
-        __auto_type _ = _t3368;
+        __auto_type _ = _t3429;
         /* pass */
         GpuEmitter_fail(self, _tr_str_lit("unsupported assignment target in kernel"));
     }
@@ -552,12 +554,12 @@ __auto_type is_move = _t3368.data.EIdent.is_move;
 
 __attribute__((hot)) void GpuEmitter_emit_stmt_expr(GpuEmitter* self, HirExpr e) {
     /* pass */
-    __auto_type _t3370 = e;
-    if (_t3370.tag == HirExpr_EMethodCall) {
-        __auto_type obj = _t3370.data.EMethodCall.obj;
-__auto_type method = _t3370.data.EMethodCall.method;
-__auto_type args = _t3370.data.EMethodCall.args;
-__auto_type ty = _t3370.data.EMethodCall.ty;
+    __auto_type _t3431 = e;
+    if (_t3431.tag == HirExpr_EMethodCall) {
+        __auto_type obj = _t3431.data.EMethodCall.obj;
+__auto_type method = _t3431.data.EMethodCall.method;
+__auto_type args = _t3431.data.EMethodCall.args;
+__auto_type ty = _t3431.data.EMethodCall.ty;
         /* pass */
         if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("write"))) == 0) && (args->len == 1LL))) {
             /* pass */
@@ -568,10 +570,10 @@ __auto_type ty = _t3370.data.EMethodCall.ty;
         /* pass */
         GVal* _v = GpuEmitter_emit_expr_hir(self, e);
         _tr_obj_release(_v, _trdrop_GVal);
-    } else if (_t3370.tag == HirExpr_ECall) {
-        __auto_type callee = _t3370.data.ECall.callee;
-__auto_type args = _t3370.data.ECall.args;
-__auto_type ty = _t3370.data.ECall.ty;
+    } else if (_t3431.tag == HirExpr_ECall) {
+        __auto_type callee = _t3431.data.ECall.callee;
+__auto_type args = _t3431.data.ECall.args;
+__auto_type ty = _t3431.data.ECall.ty;
         /* pass */
         if ((strcmp(_tr_strz(GpuEmitter_callee_name(self, (*callee))), _tr_strz(_tr_str_lit("gpu_barrier"))) == 0)) {
             /* pass */
@@ -589,7 +591,7 @@ __auto_type ty = _t3370.data.ECall.ty;
         GVal* _v2 = GpuEmitter_emit_expr_hir(self, e);
         _tr_obj_release(_v2, _trdrop_GVal);
     } else if (1) {
-        __auto_type _ = _t3370;
+        __auto_type _ = _t3431;
         /* pass */
         GVal* _v3 = GpuEmitter_emit_expr_hir(self, e);
         _tr_obj_release(_v3, _trdrop_GVal);
@@ -598,12 +600,12 @@ __auto_type ty = _t3370.data.ECall.ty;
 
 __attribute__((hot)) void GpuEmitter_emit_store(GpuEmitter* self, HirExpr chain, HirExpr* valp) {
     /* pass */
-    __auto_type _t3371 = chain;
-    if (_t3371.tag == HirExpr_EMethodCall) {
-        __auto_type pobj = _t3371.data.EMethodCall.obj;
-__auto_type pmeth = _t3371.data.EMethodCall.method;
-__auto_type pargs = _t3371.data.EMethodCall.args;
-__auto_type pty = _t3371.data.EMethodCall.ty;
+    __auto_type _t3432 = chain;
+    if (_t3432.tag == HirExpr_EMethodCall) {
+        __auto_type pobj = _t3432.data.EMethodCall.obj;
+__auto_type pmeth = _t3432.data.EMethodCall.method;
+__auto_type pargs = _t3432.data.EMethodCall.args;
+__auto_type pty = _t3432.data.EMethodCall.ty;
         /* pass */
         if (((strcmp(_tr_strz(pmeth), _tr_strz(_tr_str_lit("offset"))) != 0) || (pargs->len != 1LL))) {
             /* pass */
@@ -620,13 +622,13 @@ __auto_type pty = _t3371.data.EMethodCall.ty;
         /* pass */
         TrStr gep = GpuEmitter_fresh(self);
         /* pass */
-        ({ TrStr _at_t3372 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(gep))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = getelementptr "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pr->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr addrspace(1) "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pr->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", i64 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(i64idx)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3372); _tr_str_release(_at_t3372); });
+        ({ TrStr _at_t3433 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(gep))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = getelementptr "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pr->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr addrspace(1) "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pr->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", i64 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(i64idx)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3433); _tr_str_release(_at_t3433); });
         /* pass */
         GVal* v = GpuEmitter_emit_expr(self, valp);
         /* pass */
         TrStr cv = GpuEmitter_coerce(self, v, pr->ty);
         /* pass */
-        ({ TrStr _at_t3373 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  store ")), _tr_strz(pr->ty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cv)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr addrspace(1) "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(gep)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3373); _tr_str_release(_at_t3373); });
+        ({ TrStr _at_t3434 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  store ")), _tr_strz(pr->ty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(cv)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr addrspace(1) "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(gep)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3434); _tr_str_release(_at_t3434); });
         _tr_obj_release(pr, _trdrop_GVal);
         _tr_obj_release(idx, _trdrop_GVal);
         _tr_str_release(i64idx);
@@ -634,7 +636,7 @@ __auto_type pty = _t3371.data.EMethodCall.ty;
         _tr_obj_release(v, _trdrop_GVal);
         _tr_str_release(cv);
     } else if (1) {
-        __auto_type _ = _t3371;
+        __auto_type _ = _t3432;
         /* pass */
         GpuEmitter_fail(self, _tr_str_lit("store target must be p.offset(i).write(v)"));
     }
@@ -642,29 +644,29 @@ __auto_type pty = _t3371.data.EMethodCall.ty;
 
 __attribute__((hot)) GVal* GpuEmitter_emit_ptr(GpuEmitter* self, HirExpr e) {
     /* pass */
-    __auto_type _t3374 = e;
-    if (_t3374.tag == HirExpr_EIdent) {
-        __auto_type name = _t3374.data.EIdent.name;
-__auto_type ty = _t3374.data.EIdent.ty;
-__auto_type is_move = _t3374.data.EIdent.is_move;
+    __auto_type _t3435 = e;
+    if (_t3435.tag == HirExpr_EIdent) {
+        __auto_type name = _t3435.data.EIdent.name;
+__auto_type ty = _t3435.data.EIdent.ty;
+__auto_type is_move = _t3435.data.EIdent.is_move;
         /* pass */
         TrStr et = GpuEmitter_var_elem_ty(self, name);
         /* pass */
         if ((strcmp(_tr_strz(et), _tr_strz(_tr_str_lit(""))) == 0)) {
             /* pass */
-            TrStr _strtmp_t3375 = _tr_str_lit("float");
+            TrStr _strtmp_t3436 = _tr_str_lit("float");
             _tr_str_release(et);
-            et = _strtmp_t3375;
+            et = _strtmp_t3436;
         }
         /* pass */
         TrStr r = GpuEmitter_fresh(self);
         /* pass */
-        ({ TrStr _at_t3376 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = load ptr addrspace(1), ptr %var_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3376); _tr_str_release(_at_t3376); });
+        ({ TrStr _at_t3437 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = load ptr addrspace(1), ptr %var_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3437); _tr_str_release(_at_t3437); });
         /* pass */
         return GVal_make(et, r);
-    } else if (_t3374.tag == HirExpr_ECast) {
-        __auto_type inner = _t3374.data.ECast.expr;
-__auto_type target_ty = _t3374.data.ECast.target_ty;
+    } else if (_t3435.tag == HirExpr_ECast) {
+        __auto_type inner = _t3435.data.ECast.expr;
+__auto_type target_ty = _t3435.data.ECast.target_ty;
         /* pass */
         GVal* g = GpuEmitter_emit_ptr(self, (*inner));
         /* pass */
@@ -675,7 +677,7 @@ __auto_type target_ty = _t3374.data.ECast.target_ty;
         /* pass */
         return g;
     } else if (1) {
-        __auto_type _ = _t3374;
+        __auto_type _ = _t3435;
         /* pass */
         GpuEmitter_fail(self, _tr_str_lit("unsupported pointer expression in kernel"));
         /* pass */
@@ -690,38 +692,38 @@ __attribute__((hot)) GVal* GpuEmitter_emit_expr(GpuEmitter* self, HirExpr* ep) {
 
 __attribute__((hot)) GVal* GpuEmitter_emit_expr_hir(GpuEmitter* self, HirExpr e) {
     /* pass */
-    __auto_type _t3377 = e;
-    if (_t3377.tag == HirExpr_ELitInt) {
-        __auto_type val = _t3377.data.ELitInt.val;
-__auto_type ty = _t3377.data.ELitInt.ty;
+    __auto_type _t3438 = e;
+    if (_t3438.tag == HirExpr_ELitInt) {
+        __auto_type val = _t3438.data.ELitInt.val;
+__auto_type ty = _t3438.data.ELitInt.ty;
         /* pass */
         TrStr t = _gpu_scalar_ty(ty->name);
         /* pass */
         if (_gpu_is_float(t)) {
             /* pass */
-            TrStr _strtmp_t3378 = _tr_str_lit("i64");
+            TrStr _strtmp_t3439 = _tr_str_lit("i64");
             _tr_str_release(t);
-            t = _strtmp_t3378;
+            t = _strtmp_t3439;
         }
         /* pass */
-        return ({ TrStr _at_t3379 = (_tr_str_wrap(_tr_int_to_str((long long)(val)))); __auto_type _wr = (GVal_make(t, _at_t3379)); _tr_str_release(_at_t3379); _wr; });
-    } else if (_t3377.tag == HirExpr_ELitFloat) {
-        __auto_type val = _t3377.data.ELitFloat.val;
-__auto_type ty = _t3377.data.ELitFloat.ty;
+        return ({ TrStr _at_t3440 = (_tr_str_wrap(_tr_int_to_str((long long)(val)))); __auto_type _wr = (GVal_make(t, _at_t3440)); _tr_str_release(_at_t3440); _wr; });
+    } else if (_t3438.tag == HirExpr_ELitFloat) {
+        __auto_type val = _t3438.data.ELitFloat.val;
+__auto_type ty = _t3438.data.ELitFloat.ty;
         /* pass */
         TrStr ft = _gpu_scalar_ty(ty->name);
         /* pass */
         if ((!_gpu_is_float(ft))) {
             /* pass */
-            TrStr _strtmp_t3380 = _tr_str_lit("double");
+            TrStr _strtmp_t3441 = _tr_str_lit("double");
             _tr_str_release(ft);
-            ft = _strtmp_t3380;
+            ft = _strtmp_t3441;
         }
         /* pass */
-        return ({ TrStr _at_t3381 = (GpuEmitter_float_lit(self, val)); __auto_type _wr = (GVal_make(ft, _at_t3381)); _tr_str_release(_at_t3381); _wr; });
-    } else if (_t3377.tag == HirExpr_ELitBool) {
-        __auto_type val = _t3377.data.ELitBool.val;
-__auto_type ty = _t3377.data.ELitBool.ty;
+        return ({ TrStr _at_t3442 = (GpuEmitter_float_lit(self, val)); __auto_type _wr = (GVal_make(ft, _at_t3442)); _tr_str_release(_at_t3442); _wr; });
+    } else if (_t3438.tag == HirExpr_ELitBool) {
+        __auto_type val = _t3438.data.ELitBool.val;
+__auto_type ty = _t3438.data.ELitBool.ty;
         /* pass */
         if (val) {
             /* pass */
@@ -729,29 +731,29 @@ __auto_type ty = _t3377.data.ELitBool.ty;
         }
         /* pass */
         return GVal_make(_tr_str_lit("i1"), _tr_str_lit("0"));
-    } else if (_t3377.tag == HirExpr_EIdent) {
-        __auto_type name = _t3377.data.EIdent.name;
-__auto_type ty = _t3377.data.EIdent.ty;
-__auto_type is_move = _t3377.data.EIdent.is_move;
+    } else if (_t3438.tag == HirExpr_EIdent) {
+        __auto_type name = _t3438.data.EIdent.name;
+__auto_type ty = _t3438.data.EIdent.ty;
+__auto_type is_move = _t3438.data.EIdent.is_move;
         /* pass */
         TrStr slot = GpuEmitter_var_slot_ty(self, name);
         /* pass */
         TrStr r = GpuEmitter_fresh(self);
         /* pass */
-        ({ TrStr _at_t3382 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = load "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(slot)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr %var_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3382); _tr_str_release(_at_t3382); });
+        ({ TrStr _at_t3443 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = load "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(slot)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr %var_"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(name)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3443); _tr_str_release(_at_t3443); });
         /* pass */
         return GVal_make(slot, r);
-    } else if (_t3377.tag == HirExpr_EBinOp) {
-        __auto_type op = _t3377.data.EBinOp.op;
-__auto_type left = _t3377.data.EBinOp.left;
-__auto_type right = _t3377.data.EBinOp.right;
-__auto_type ty = _t3377.data.EBinOp.ty;
+    } else if (_t3438.tag == HirExpr_EBinOp) {
+        __auto_type op = _t3438.data.EBinOp.op;
+__auto_type left = _t3438.data.EBinOp.left;
+__auto_type right = _t3438.data.EBinOp.right;
+__auto_type ty = _t3438.data.EBinOp.ty;
         /* pass */
         return GpuEmitter_emit_binop(self, op, left, right);
-    } else if (_t3377.tag == HirExpr_EUnaryOp) {
-        __auto_type op = _t3377.data.EUnaryOp.op;
-__auto_type expr = _t3377.data.EUnaryOp.expr;
-__auto_type ty = _t3377.data.EUnaryOp.ty;
+    } else if (_t3438.tag == HirExpr_EUnaryOp) {
+        __auto_type op = _t3438.data.EUnaryOp.op;
+__auto_type expr = _t3438.data.EUnaryOp.expr;
+__auto_type ty = _t3438.data.EUnaryOp.ty;
         /* pass */
         GVal* v = GpuEmitter_emit_expr(self, expr);
         /* pass */
@@ -761,19 +763,19 @@ __auto_type ty = _t3377.data.EUnaryOp.ty;
             /* pass */
             if (_gpu_is_float(v->ty)) {
                 /* pass */
-                ({ TrStr _at_t3383 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fneg "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3383); _tr_str_release(_at_t3383); });
+                ({ TrStr _at_t3444 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fneg "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3444); _tr_str_release(_at_t3444); });
             } else {
                 /* pass */
-                ({ TrStr _at_t3384 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = sub "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 0, "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3384); _tr_str_release(_at_t3384); });
+                ({ TrStr _at_t3445 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = sub "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" 0, "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3445); _tr_str_release(_at_t3445); });
             }
             /* pass */
             return GVal_make(v->ty, r);
         }
         /* pass */
         return v;
-    } else if (_t3377.tag == HirExpr_ECast) {
-        __auto_type inner = _t3377.data.ECast.expr;
-__auto_type target_ty = _t3377.data.ECast.target_ty;
+    } else if (_t3438.tag == HirExpr_ECast) {
+        __auto_type inner = _t3438.data.ECast.expr;
+__auto_type target_ty = _t3438.data.ECast.target_ty;
         /* pass */
         GVal* iv = GpuEmitter_emit_expr(self, inner);
         /* pass */
@@ -785,29 +787,29 @@ __auto_type target_ty = _t3377.data.ECast.target_ty;
             return iv;
         }
         /* pass */
-        return ({ TrStr _at_t3385 = (GpuEmitter_coerce(self, iv, tt)); __auto_type _wr = (GVal_make(tt, _at_t3385)); _tr_str_release(_at_t3385); _wr; });
-    } else if (_t3377.tag == HirExpr_EMethodCall) {
-        __auto_type obj = _t3377.data.EMethodCall.obj;
-__auto_type method = _t3377.data.EMethodCall.method;
-__auto_type args = _t3377.data.EMethodCall.args;
-__auto_type ty = _t3377.data.EMethodCall.ty;
+        return ({ TrStr _at_t3446 = (GpuEmitter_coerce(self, iv, tt)); __auto_type _wr = (GVal_make(tt, _at_t3446)); _tr_str_release(_at_t3446); _wr; });
+    } else if (_t3438.tag == HirExpr_EMethodCall) {
+        __auto_type obj = _t3438.data.EMethodCall.obj;
+__auto_type method = _t3438.data.EMethodCall.method;
+__auto_type args = _t3438.data.EMethodCall.args;
+__auto_type ty = _t3438.data.EMethodCall.ty;
         /* pass */
         if (((strcmp(_tr_strz(method), _tr_strz(_tr_str_lit("read"))) == 0) && (args->len == 0LL))) {
             /* pass */
             return GpuEmitter_emit_load(self, (*obj));
         }
         /* pass */
-        ({ TrStr _at_t3386 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("unsupported method '")), _tr_strz(method))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' in kernel"))); _tr_str_release(_cl); _cres; })); GpuEmitter_fail(self, _at_t3386); _tr_str_release(_at_t3386); });
+        ({ TrStr _at_t3447 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("unsupported method '")), _tr_strz(method))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' in kernel"))); _tr_str_release(_cl); _cres; })); GpuEmitter_fail(self, _at_t3447); _tr_str_release(_at_t3447); });
         /* pass */
         return GVal_make(_tr_str_lit("i64"), _tr_str_lit("0"));
-    } else if (_t3377.tag == HirExpr_ECall) {
-        __auto_type callee = _t3377.data.ECall.callee;
-__auto_type args = _t3377.data.ECall.args;
-__auto_type ty = _t3377.data.ECall.ty;
+    } else if (_t3438.tag == HirExpr_ECall) {
+        __auto_type callee = _t3438.data.ECall.callee;
+__auto_type args = _t3438.data.ECall.args;
+__auto_type ty = _t3438.data.ECall.ty;
         /* pass */
         return GpuEmitter_emit_call(self, (*callee), args);
     } else if (1) {
-        __auto_type _ = _t3377;
+        __auto_type _ = _t3438;
         /* pass */
         GpuEmitter_fail(self, _tr_str_lit("unsupported expression in kernel"));
         /* pass */
@@ -817,12 +819,12 @@ __auto_type ty = _t3377.data.ECall.ty;
 
 __attribute__((hot)) GVal* GpuEmitter_emit_load(GpuEmitter* self, HirExpr chain) {
     /* pass */
-    __auto_type _t3387 = chain;
-    if (_t3387.tag == HirExpr_EMethodCall) {
-        __auto_type pobj = _t3387.data.EMethodCall.obj;
-__auto_type pmeth = _t3387.data.EMethodCall.method;
-__auto_type pargs = _t3387.data.EMethodCall.args;
-__auto_type pty = _t3387.data.EMethodCall.ty;
+    __auto_type _t3448 = chain;
+    if (_t3448.tag == HirExpr_EMethodCall) {
+        __auto_type pobj = _t3448.data.EMethodCall.obj;
+__auto_type pmeth = _t3448.data.EMethodCall.method;
+__auto_type pargs = _t3448.data.EMethodCall.args;
+__auto_type pty = _t3448.data.EMethodCall.ty;
         /* pass */
         if (((strcmp(_tr_strz(pmeth), _tr_strz(_tr_str_lit("offset"))) != 0) || (pargs->len != 1LL))) {
             /* pass */
@@ -839,18 +841,18 @@ __auto_type pty = _t3387.data.EMethodCall.ty;
         /* pass */
         TrStr gep = GpuEmitter_fresh(self);
         /* pass */
-        ({ TrStr _at_t3388 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(gep))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = getelementptr "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pr->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr addrspace(1) "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pr->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", i64 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(i64idx)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3388); _tr_str_release(_at_t3388); });
+        ({ TrStr _at_t3449 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(gep))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = getelementptr "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pr->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr addrspace(1) "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pr->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", i64 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(i64idx)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3449); _tr_str_release(_at_t3449); });
         /* pass */
         TrStr r = GpuEmitter_fresh(self);
         /* pass */
-        ({ TrStr _at_t3389 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = load "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pr->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr addrspace(1) "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(gep)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3389); _tr_str_release(_at_t3389); });
+        ({ TrStr _at_t3450 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = load "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pr->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", ptr addrspace(1) "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(gep)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3450); _tr_str_release(_at_t3450); });
         /* pass */
         _tr_obj_release(idx, _trdrop_GVal);
         _tr_str_release(i64idx);
         _tr_str_release(gep);
         return GVal_make(pr->ty, r);
     } else if (1) {
-        __auto_type _ = _t3387;
+        __auto_type _ = _t3448;
         /* pass */
         GpuEmitter_fail(self, _tr_str_lit("load must be p.offset(i).read()"));
         /* pass */
@@ -860,14 +862,14 @@ __auto_type pty = _t3387.data.EMethodCall.ty;
 
 __attribute__((hot)) TrStr GpuEmitter_callee_name(GpuEmitter* self, HirExpr c) {
     /* pass */
-    __auto_type _t3390 = c;
-    if (_t3390.tag == HirExpr_EIdent) {
-        __auto_type name = _t3390.data.EIdent.name;
-__auto_type ty = _t3390.data.EIdent.ty;
-__auto_type is_move = _t3390.data.EIdent.is_move;
+    __auto_type _t3451 = c;
+    if (_t3451.tag == HirExpr_EIdent) {
+        __auto_type name = _t3451.data.EIdent.name;
+__auto_type ty = _t3451.data.EIdent.ty;
+__auto_type is_move = _t3451.data.EIdent.is_move;
         return _tr_str_retain(name);
     } else if (1) {
-        __auto_type _ = _t3390;
+        __auto_type _ = _t3451;
         return _tr_str_lit("");
     }
 }
@@ -906,16 +908,16 @@ __attribute__((hot)) GVal* GpuEmitter_emit_call(GpuEmitter* self, HirExpr callee
                 /* pass */
                 if ((ai > 0LL)) {
                     /* pass */
-                    TrStr _strtmp_t3391 = _tr_strx_concat(_tr_strz(argstr), _tr_strz(_tr_str_lit(", ")));
+                    TrStr _strtmp_t3452 = _tr_strx_concat(_tr_strz(argstr), _tr_strz(_tr_str_lit(", ")));
                     _tr_str_release(argstr);
-                    argstr = _strtmp_t3391;
+                    argstr = _strtmp_t3452;
                 }
                 /* pass */
                 GVal* av = GpuEmitter_emit_expr(self, ((HirExpr*)List_ptr_get(args, ai)));
                 /* pass */
-                TrStr aty = av->ty;
+                TrStr aty = _tr_str_retain(av->ty);
                 /* pass */
-                TrStr aval = av->val;
+                TrStr aval = _tr_str_retain(av->val);
                 /* pass */
                 if ((ai < df->params->len)) {
                     /* pass */
@@ -923,23 +925,29 @@ __attribute__((hot)) GVal* GpuEmitter_emit_call(GpuEmitter* self, HirExpr callee
                     /* pass */
                     if (((strcmp(_tr_strz(ptt), _tr_strz(_tr_str_lit("ptr addrspace(1)"))) != 0) && (strcmp(_tr_strz(aty), _tr_strz(ptt)) != 0))) {
                         /* pass */
-                        aval = GpuEmitter_coerce(self, av, ptt);
+                        TrStr _strtmp_t3453 = GpuEmitter_coerce(self, av, ptt);
+                        _tr_str_release(aval);
+                        aval = _strtmp_t3453;
                         /* pass */
-                        aty = ptt;
+                        TrStr _strtmp_t3454 = _tr_str_retain(ptt);
+                        _tr_str_release(aty);
+                        aty = _strtmp_t3454;
                     }
                 }
                 /* pass */
-                TrStr _strtmp_t3392 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(argstr), _tr_strz(aty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(aval)); _tr_str_release(_cl); _cres; });
+                TrStr _strtmp_t3455 = ({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(argstr), _tr_strz(aty))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(aval)); _tr_str_release(_cl); _cres; });
                 _tr_str_release(argstr);
-                argstr = _strtmp_t3392;
+                argstr = _strtmp_t3455;
                 /* pass */
                 ai = (ai + 1LL);
                 _tr_obj_release(av, _trdrop_GVal);
+                _tr_str_release(aty);
+                _tr_str_release(aval);
             }
             /* pass */
             if ((strcmp(_tr_strz(rty), _tr_strz(_tr_str_lit("void"))) == 0)) {
                 /* pass */
-                ({ TrStr _at_t3393 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  call void @")), _tr_strz(nm))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(argstr)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3393); _tr_str_release(_at_t3393); });
+                ({ TrStr _at_t3456 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  call void @")), _tr_strz(nm))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(argstr)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3456); _tr_str_release(_at_t3456); });
                 /* pass */
                 _tr_str_release(nm);
                 _tr_str_release(rty);
@@ -949,7 +957,7 @@ __attribute__((hot)) GVal* GpuEmitter_emit_call(GpuEmitter* self, HirExpr callee
             /* pass */
             TrStr r = GpuEmitter_fresh(self);
             /* pass */
-            ({ TrStr _at_t3394 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(rty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" @"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(nm)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(argstr)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3394); _tr_str_release(_at_t3394); });
+            ({ TrStr _at_t3457 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(rty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" @"))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(nm)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("("))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(argstr)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3457); _tr_str_release(_at_t3457); });
             /* pass */
             _tr_str_release(nm);
             _tr_str_release(argstr);
@@ -959,7 +967,7 @@ __attribute__((hot)) GVal* GpuEmitter_emit_call(GpuEmitter* self, HirExpr callee
         di = (di + 1LL);
     }
     /* pass */
-    ({ TrStr _at_t3395 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("call to '")), _tr_strz(nm))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' not allowed in kernel (mark it @device, or use a GPU builtin)"))); _tr_str_release(_cl); _cres; })); GpuEmitter_fail(self, _at_t3395); _tr_str_release(_at_t3395); });
+    ({ TrStr _at_t3458 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("call to '")), _tr_strz(nm))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' not allowed in kernel (mark it @device, or use a GPU builtin)"))); _tr_str_release(_cl); _cres; })); GpuEmitter_fail(self, _at_t3458); _tr_str_release(_at_t3458); });
     /* pass */
     _tr_str_release(nm);
     return GVal_make(_tr_str_lit("i64"), _tr_str_lit("0"));
@@ -973,23 +981,23 @@ __attribute__((hot)) GVal* GpuEmitter_emit_gpu_builtin(GpuEmitter* self, TrStr n
         /* pass */
         if ((dim == 1LL)) {
             /* pass */
-            TrStr _strtmp_t3396 = _tr_str_lit("y");
+            TrStr _strtmp_t3459 = _tr_str_lit("y");
             _tr_str_release(axis);
-            axis = _strtmp_t3396;
+            axis = _strtmp_t3459;
         }
         /* pass */
         if ((dim == 2LL)) {
             /* pass */
-            TrStr _strtmp_t3397 = _tr_str_lit("z");
+            TrStr _strtmp_t3460 = _tr_str_lit("z");
             _tr_str_release(axis);
-            axis = _strtmp_t3397;
+            axis = _strtmp_t3460;
         }
         /* pass */
         if ((strcmp(_tr_strz(nm), _tr_strz(_tr_str_lit("gpu_local_id"))) == 0)) {
             /* pass */
             TrStr r = GpuEmitter_fresh(self);
             /* pass */
-            ({ TrStr _at_t3398 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.tid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3398); _tr_str_release(_at_t3398); });
+            ({ TrStr _at_t3461 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.tid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3461); _tr_str_release(_at_t3461); });
             /* pass */
             _tr_str_release(axis);
             return GpuEmitter_i32_to_i64(self, r);
@@ -999,7 +1007,7 @@ __attribute__((hot)) GVal* GpuEmitter_emit_gpu_builtin(GpuEmitter* self, TrStr n
             /* pass */
             TrStr r2 = GpuEmitter_fresh(self);
             /* pass */
-            ({ TrStr _at_t3399 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r2))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.ctaid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3399); _tr_str_release(_at_t3399); });
+            ({ TrStr _at_t3462 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r2))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.ctaid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3462); _tr_str_release(_at_t3462); });
             /* pass */
             _tr_str_release(axis);
             return GpuEmitter_i32_to_i64(self, r2);
@@ -1009,7 +1017,7 @@ __attribute__((hot)) GVal* GpuEmitter_emit_gpu_builtin(GpuEmitter* self, TrStr n
             /* pass */
             TrStr r3 = GpuEmitter_fresh(self);
             /* pass */
-            ({ TrStr _at_t3400 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r3))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.ntid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3400); _tr_str_release(_at_t3400); });
+            ({ TrStr _at_t3463 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r3))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.ntid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3463); _tr_str_release(_at_t3463); });
             /* pass */
             _tr_str_release(axis);
             return GpuEmitter_i32_to_i64(self, r3);
@@ -1019,7 +1027,7 @@ __attribute__((hot)) GVal* GpuEmitter_emit_gpu_builtin(GpuEmitter* self, TrStr n
             /* pass */
             TrStr r4 = GpuEmitter_fresh(self);
             /* pass */
-            ({ TrStr _at_t3401 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r4))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.nctaid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3401); _tr_str_release(_at_t3401); });
+            ({ TrStr _at_t3464 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r4))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.nctaid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3464); _tr_str_release(_at_t3464); });
             /* pass */
             _tr_str_release(axis);
             return GpuEmitter_i32_to_i64(self, r4);
@@ -1027,25 +1035,25 @@ __attribute__((hot)) GVal* GpuEmitter_emit_gpu_builtin(GpuEmitter* self, TrStr n
         /* pass */
         TrStr ct = GpuEmitter_fresh(self);
         /* pass */
-        ({ TrStr _at_t3402 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(ct))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.ctaid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3402); _tr_str_release(_at_t3402); });
+        ({ TrStr _at_t3465 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(ct))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.ctaid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3465); _tr_str_release(_at_t3465); });
         /* pass */
         TrStr nt = GpuEmitter_fresh(self);
         /* pass */
-        ({ TrStr _at_t3403 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(nt))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.ntid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3403); _tr_str_release(_at_t3403); });
+        ({ TrStr _at_t3466 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(nt))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.ntid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3466); _tr_str_release(_at_t3466); });
         /* pass */
         TrStr m = GpuEmitter_fresh(self);
         /* pass */
-        ({ TrStr _at_t3404 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(m))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = mul i32 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(nt)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3404); _tr_str_release(_at_t3404); });
+        ({ TrStr _at_t3467 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(m))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = mul i32 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(nt)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3467); _tr_str_release(_at_t3467); });
         /* pass */
         if ((strcmp(_tr_strz(nm), _tr_strz(_tr_str_lit("gpu_global_size"))) == 0)) {
             /* pass */
             TrStr nc = GpuEmitter_fresh(self);
             /* pass */
-            ({ TrStr _at_t3405 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(nc))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.nctaid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3405); _tr_str_release(_at_t3405); });
+            ({ TrStr _at_t3468 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(nc))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.nctaid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3468); _tr_str_release(_at_t3468); });
             /* pass */
             TrStr gs = GpuEmitter_fresh(self);
             /* pass */
-            ({ TrStr _at_t3406 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(gs))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = mul i32 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(nc)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(nt)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3406); _tr_str_release(_at_t3406); });
+            ({ TrStr _at_t3469 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(gs))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = mul i32 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(nc)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(nt)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3469); _tr_str_release(_at_t3469); });
             /* pass */
             _tr_str_release(axis);
             _tr_str_release(ct);
@@ -1057,11 +1065,11 @@ __attribute__((hot)) GVal* GpuEmitter_emit_gpu_builtin(GpuEmitter* self, TrStr n
         /* pass */
         TrStr tid = GpuEmitter_fresh(self);
         /* pass */
-        ({ TrStr _at_t3407 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(tid))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.tid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3407); _tr_str_release(_at_t3407); });
+        ({ TrStr _at_t3470 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(tid))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call i32 @llvm.nvvm.read.ptx.sreg.tid."))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(axis)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("()\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3470); _tr_str_release(_at_t3470); });
         /* pass */
         TrStr g = GpuEmitter_fresh(self);
         /* pass */
-        ({ TrStr _at_t3408 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(g))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = add i32 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(m)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(tid)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3408); _tr_str_release(_at_t3408); });
+        ({ TrStr _at_t3471 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(g))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = add i32 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(m)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(tid)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3471); _tr_str_release(_at_t3471); });
         /* pass */
         _tr_str_release(axis);
         _tr_str_release(ct);
@@ -1075,42 +1083,42 @@ __attribute__((hot)) GVal* GpuEmitter_emit_gpu_builtin(GpuEmitter* self, TrStr n
     /* pass */
     if ((strcmp(_tr_strz(nm), _tr_strz(_tr_str_lit("gpu_local_id"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t3409 = _tr_str_lit("@_Z12get_local_idj");
+        TrStr _strtmp_t3472 = _tr_str_lit("@_Z12get_local_idj");
         _tr_str_release(mangled);
-        mangled = _strtmp_t3409;
+        mangled = _strtmp_t3472;
     }
     /* pass */
     if ((strcmp(_tr_strz(nm), _tr_strz(_tr_str_lit("gpu_group_id"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t3410 = _tr_str_lit("@_Z12get_group_idj");
+        TrStr _strtmp_t3473 = _tr_str_lit("@_Z12get_group_idj");
         _tr_str_release(mangled);
-        mangled = _strtmp_t3410;
+        mangled = _strtmp_t3473;
     }
     /* pass */
     if ((strcmp(_tr_strz(nm), _tr_strz(_tr_str_lit("gpu_local_size"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t3411 = _tr_str_lit("@_Z14get_local_sizej");
+        TrStr _strtmp_t3474 = _tr_str_lit("@_Z14get_local_sizej");
         _tr_str_release(mangled);
-        mangled = _strtmp_t3411;
+        mangled = _strtmp_t3474;
     }
     /* pass */
     if ((strcmp(_tr_strz(nm), _tr_strz(_tr_str_lit("gpu_global_size"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t3412 = _tr_str_lit("@_Z15get_global_sizej");
+        TrStr _strtmp_t3475 = _tr_str_lit("@_Z15get_global_sizej");
         _tr_str_release(mangled);
-        mangled = _strtmp_t3412;
+        mangled = _strtmp_t3475;
     }
     /* pass */
     if ((strcmp(_tr_strz(nm), _tr_strz(_tr_str_lit("gpu_num_groups"))) == 0)) {
         /* pass */
-        TrStr _strtmp_t3413 = _tr_str_lit("@_Z14get_num_groupsj");
+        TrStr _strtmp_t3476 = _tr_str_lit("@_Z14get_num_groupsj");
         _tr_str_release(mangled);
-        mangled = _strtmp_t3413;
+        mangled = _strtmp_t3476;
     }
     /* pass */
     TrStr sr = GpuEmitter_fresh(self);
     /* pass */
-    ({ TrStr _at_t3414 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(sr))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call spir_func i64 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(mangled)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("(i32 "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(dim)))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3414); _tr_str_release(_at_t3414); });
+    ({ TrStr _at_t3477 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(sr))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = call spir_func i64 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(mangled)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("(i32 "))); _tr_str_release(_cl); _cres; })); TrStr _cr = (_tr_str_wrap(_tr_int_to_str((long long)(dim)))); TrStr _cres = _tr_strx_concat(_cl.data, _cr.data); _tr_str_release(_cl); _tr_str_release(_cr); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(")\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3477); _tr_str_release(_at_t3477); });
     /* pass */
     _tr_str_release(mangled);
     return GVal_make(_tr_str_lit("i64"), sr);
@@ -1120,7 +1128,7 @@ __attribute__((hot)) GVal* GpuEmitter_i32_to_i64(GpuEmitter* self, TrStr v) {
     /* pass */
     TrStr r = GpuEmitter_fresh(self);
     /* pass */
-    ({ TrStr _at_t3415 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = sext i32 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to i64\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3415); _tr_str_release(_at_t3415); });
+    ({ TrStr _at_t3478 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = sext i32 "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to i64\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3478); _tr_str_release(_at_t3478); });
     /* pass */
     return GVal_make(_tr_str_lit("i64"), r);
 }
@@ -1145,10 +1153,10 @@ __attribute__((hot)) GVal* GpuEmitter_emit_binop(GpuEmitter* self, TrStr op, Hir
         /* pass */
         if (isf) {
             /* pass */
-            ({ TrStr _at_t3416 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fadd "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3416); _tr_str_release(_at_t3416); });
+            ({ TrStr _at_t3479 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fadd "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3479); _tr_str_release(_at_t3479); });
         } else {
             /* pass */
-            ({ TrStr _at_t3417 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = add "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3417); _tr_str_release(_at_t3417); });
+            ({ TrStr _at_t3480 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = add "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3480); _tr_str_release(_at_t3480); });
         }
         /* pass */
         _tr_obj_release(l, _trdrop_GVal);
@@ -1162,10 +1170,10 @@ __attribute__((hot)) GVal* GpuEmitter_emit_binop(GpuEmitter* self, TrStr op, Hir
         /* pass */
         if (isf) {
             /* pass */
-            ({ TrStr _at_t3418 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fsub "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3418); _tr_str_release(_at_t3418); });
+            ({ TrStr _at_t3481 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fsub "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3481); _tr_str_release(_at_t3481); });
         } else {
             /* pass */
-            ({ TrStr _at_t3419 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = sub "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3419); _tr_str_release(_at_t3419); });
+            ({ TrStr _at_t3482 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = sub "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3482); _tr_str_release(_at_t3482); });
         }
         /* pass */
         _tr_obj_release(l, _trdrop_GVal);
@@ -1179,10 +1187,10 @@ __attribute__((hot)) GVal* GpuEmitter_emit_binop(GpuEmitter* self, TrStr op, Hir
         /* pass */
         if (isf) {
             /* pass */
-            ({ TrStr _at_t3420 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fmul "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3420); _tr_str_release(_at_t3420); });
+            ({ TrStr _at_t3483 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fmul "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3483); _tr_str_release(_at_t3483); });
         } else {
             /* pass */
-            ({ TrStr _at_t3421 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = mul "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3421); _tr_str_release(_at_t3421); });
+            ({ TrStr _at_t3484 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = mul "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3484); _tr_str_release(_at_t3484); });
         }
         /* pass */
         _tr_obj_release(l, _trdrop_GVal);
@@ -1196,10 +1204,10 @@ __attribute__((hot)) GVal* GpuEmitter_emit_binop(GpuEmitter* self, TrStr op, Hir
         /* pass */
         if (isf) {
             /* pass */
-            ({ TrStr _at_t3422 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fdiv "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3422); _tr_str_release(_at_t3422); });
+            ({ TrStr _at_t3485 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fdiv "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3485); _tr_str_release(_at_t3485); });
         } else {
             /* pass */
-            ({ TrStr _at_t3423 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = sdiv "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3423); _tr_str_release(_at_t3423); });
+            ({ TrStr _at_t3486 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = sdiv "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3486); _tr_str_release(_at_t3486); });
         }
         /* pass */
         _tr_obj_release(l, _trdrop_GVal);
@@ -1213,10 +1221,10 @@ __attribute__((hot)) GVal* GpuEmitter_emit_binop(GpuEmitter* self, TrStr op, Hir
         /* pass */
         if (isf) {
             /* pass */
-            ({ TrStr _at_t3424 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = frem "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3424); _tr_str_release(_at_t3424); });
+            ({ TrStr _at_t3487 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = frem "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3487); _tr_str_release(_at_t3487); });
         } else {
             /* pass */
-            ({ TrStr _at_t3425 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = srem "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3425); _tr_str_release(_at_t3425); });
+            ({ TrStr _at_t3488 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = srem "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3488); _tr_str_release(_at_t3488); });
         }
         /* pass */
         _tr_obj_release(l, _trdrop_GVal);
@@ -1230,7 +1238,7 @@ __attribute__((hot)) GVal* GpuEmitter_emit_binop(GpuEmitter* self, TrStr op, Hir
     /* pass */
     if ((strcmp(_tr_strz(pred), _tr_strz(_tr_str_lit(""))) == 0)) {
         /* pass */
-        ({ TrStr _at_t3426 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("unsupported operator '")), _tr_strz(op))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' in kernel"))); _tr_str_release(_cl); _cres; })); GpuEmitter_fail(self, _at_t3426); _tr_str_release(_at_t3426); });
+        ({ TrStr _at_t3489 = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("unsupported operator '")), _tr_strz(op))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("' in kernel"))); _tr_str_release(_cl); _cres; })); GpuEmitter_fail(self, _at_t3489); _tr_str_release(_at_t3489); });
         /* pass */
         _tr_obj_release(l, _trdrop_GVal);
         _tr_obj_release(r, _trdrop_GVal);
@@ -1244,10 +1252,10 @@ __attribute__((hot)) GVal* GpuEmitter_emit_binop(GpuEmitter* self, TrStr op, Hir
     /* pass */
     if (isf) {
         /* pass */
-        ({ TrStr _at_t3427 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fcmp "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pred)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3427); _tr_str_release(_at_t3427); });
+        ({ TrStr _at_t3490 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fcmp "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pred)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3490); _tr_str_release(_at_t3490); });
     } else {
         /* pass */
-        ({ TrStr _at_t3428 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = icmp "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pred)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3428); _tr_str_release(_at_t3428); });
+        ({ TrStr _at_t3491 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(res))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = icmp "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(pred)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ct)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(la)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(ra)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3491); _tr_str_release(_at_t3491); });
     }
     /* pass */
     _tr_obj_release(l, _trdrop_GVal);
@@ -1370,10 +1378,10 @@ __attribute__((hot)) TrStr GpuEmitter_coerce(GpuEmitter* self, GVal* v, TrStr ta
         /* pass */
         if ((strcmp(_tr_strz(target), _tr_strz(_tr_str_lit("double"))) == 0)) {
             /* pass */
-            ({ TrStr _at_t3429 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fpext float "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to double\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3429); _tr_str_release(_at_t3429); });
+            ({ TrStr _at_t3492 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fpext float "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to double\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3492); _tr_str_release(_at_t3492); });
         } else {
             /* pass */
-            ({ TrStr _at_t3430 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fptrunc double "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to float\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3430); _tr_str_release(_at_t3430); });
+            ({ TrStr _at_t3493 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fptrunc double "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to float\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3493); _tr_str_release(_at_t3493); });
         }
         /* pass */
         return r;
@@ -1381,14 +1389,14 @@ __attribute__((hot)) TrStr GpuEmitter_coerce(GpuEmitter* self, GVal* v, TrStr ta
     /* pass */
     if ((tf && (!sf))) {
         /* pass */
-        ({ TrStr _at_t3431 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = sitofp "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(target)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3431); _tr_str_release(_at_t3431); });
+        ({ TrStr _at_t3494 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = sitofp "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(target)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3494); _tr_str_release(_at_t3494); });
         /* pass */
         return r;
     }
     /* pass */
     if ((sf && (!tf))) {
         /* pass */
-        ({ TrStr _at_t3432 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fptosi "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(target)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3432); _tr_str_release(_at_t3432); });
+        ({ TrStr _at_t3495 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fptosi "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(target)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3495); _tr_str_release(_at_t3495); });
         /* pass */
         return r;
     }
@@ -1399,14 +1407,14 @@ __attribute__((hot)) TrStr GpuEmitter_coerce(GpuEmitter* self, GVal* v, TrStr ta
     /* pass */
     if ((tw > sw)) {
         /* pass */
-        ({ TrStr _at_t3433 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = sext "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(target)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3433); _tr_str_release(_at_t3433); });
+        ({ TrStr _at_t3496 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = sext "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(target)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3496); _tr_str_release(_at_t3496); });
         /* pass */
         return r;
     }
     /* pass */
     if ((tw < sw)) {
         /* pass */
-        ({ TrStr _at_t3434 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = trunc "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(target)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3434); _tr_str_release(_at_t3434); });
+        ({ TrStr _at_t3497 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = trunc "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" to "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(target)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit("\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3497); _tr_str_release(_at_t3497); });
         /* pass */
         return r;
     }
@@ -1426,10 +1434,10 @@ __attribute__((hot)) TrStr GpuEmitter_coerce_bool(GpuEmitter* self, GVal* v) {
     /* pass */
     if (_gpu_is_float(v->ty)) {
         /* pass */
-        ({ TrStr _at_t3435 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fcmp one "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", 0.0\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3435); _tr_str_release(_at_t3435); });
+        ({ TrStr _at_t3498 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = fcmp one "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", 0.0\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3498); _tr_str_release(_at_t3498); });
     } else {
         /* pass */
-        ({ TrStr _at_t3436 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = icmp ne "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", 0\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3436); _tr_str_release(_at_t3436); });
+        ({ TrStr _at_t3499 = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (({ TrStr _cl = (_tr_strx_concat(_tr_strz(_tr_str_lit("  ")), _tr_strz(r))); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" = icmp ne "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->ty)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(" "))); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(v->val)); _tr_str_release(_cl); _cres; })); TrStr _cres = _tr_strx_concat(_cl.data, _tr_strz(_tr_str_lit(", 0\n"))); _tr_str_release(_cl); _cres; })); GpuEmitter_w(self, _at_t3499); _tr_str_release(_at_t3499); });
     }
     /* pass */
     return r;
@@ -1437,13 +1445,13 @@ __attribute__((hot)) TrStr GpuEmitter_coerce_bool(GpuEmitter* self, GVal* v) {
 
 __attribute__((hot)) long long GpuEmitter_literal_int(GpuEmitter* self, HirExpr e) {
     /* pass */
-    __auto_type _t3437 = e;
-    if (_t3437.tag == HirExpr_ELitInt) {
-        __auto_type val = _t3437.data.ELitInt.val;
-__auto_type ty = _t3437.data.ELitInt.ty;
+    __auto_type _t3500 = e;
+    if (_t3500.tag == HirExpr_ELitInt) {
+        __auto_type val = _t3500.data.ELitInt.val;
+__auto_type ty = _t3500.data.ELitInt.ty;
         return val;
     } else if (1) {
-        __auto_type _ = _t3437;
+        __auto_type _ = _t3500;
         return 0LL;
     }
 }

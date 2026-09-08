@@ -668,7 +668,7 @@ static inline TrStr _tr_str_lit_passthrough(TrStr s) { return s; }
  * `data` and `rc` are SEPARATE allocations (not one combined block):
  * `_tr_strz(t)` returns `t.data` directly, and many call sites do
  * `_tr_c_free(_tr_strz(x))` (the `unsafe: _tr_c_free(x as Pointer[char])`
- * idiom in std/*.tr) - that free() must see a real malloc base pointer.
+ * idiom in std files) - that free() must see a real malloc base pointer.
  * A combined allocation with `data = block + sizeof(long)` would make
  * that free() corrupt the heap (freeing a pointer 8 bytes past the
  * block start). Two allocations cost one extra malloc per _tr_str_new

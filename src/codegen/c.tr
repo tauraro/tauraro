@@ -7128,7 +7128,19 @@ pub class CGenerator:
                                 if self._expr_is_borrow_call(v):
                                     init_s = "_tr_str_retain(" + init_s + ")"
                                 match v.read():
-                                    case HirExpr.EPropAccess(_, _, _): pass
+                                    case HirExpr.EPropAccess(_, _, _):
+                                        # #21-style: a str FIELD read used as a fresh
+                                        # local's initializer is a borrow of the
+                                        # object's own ref; this local OWNS it
+                                        # (released at scope exit like any other
+                                        # tracked local), so retain here too — else
+                                        # a later mutation of the source object frees
+                                        # the field's buffer out from under this
+                                        # local (UAF; str_retain_wrap only retains an
+                                        # EPropAccess source on a `-> str` RETURN, not
+                                        # on a plain local binding like this one).
+                                        init_s = "_tr_str_retain(" + init_s + ")"
+                                        self.str_local_names.insert(n, true)
                                     case _: self.str_local_names.insert(n, true)
                         elif self.is_heap_class_tn(hir_expr_type(v).name) and not self.interfaces.contains(ty.name):
                             # Refcounted heap class. A proven borrow is a zero-cost
@@ -7180,10 +7192,20 @@ pub class CGenerator:
                                     _sa_rhs = self.str_retain_wrap(v, _sa_rhs, false)
                                     if self._expr_is_borrow_call(v):
                                         _sa_rhs = "_tr_str_retain(" + _sa_rhs + ")"   # own not-proven borrow
-                                    self.w(pad + "TrStr " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
+                                    # #21-style: a str FIELD read used as a fresh
+                                    # local's initializer is a borrow of the
+                                    # object's own ref; this local OWNS it, so
+                                    # retain here too — else a later mutation of
+                                    # the source object frees the field's buffer
+                                    # out from under this local (UAF; same gap as
+                                    # SLet above, str_retain_wrap only retains an
+                                    # EPropAccess source on a `-> str` return).
                                     match v.read():
-                                        case HirExpr.EPropAccess(_, _, _): pass
-                                        case _: self.str_local_names.insert(n, true)
+                                        case HirExpr.EPropAccess(_, _, _):
+                                            _sa_rhs = "_tr_str_retain(" + _sa_rhs + ")"
+                                        case _: pass
+                                    self.w(pad + "TrStr " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
+                                    self.str_local_names.insert(n, true)
                             elif self.is_heap_class_tn(hir_expr_type(v).name):
                                 # First assignment declares a heap-class local — same
                                 # retain/track as SLet (explicit T* since _tr_obj_retain

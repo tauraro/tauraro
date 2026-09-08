@@ -2223,11 +2223,13 @@ typedef struct Parser {
     TrStr src_text;
     long long error_count;
     TrStr current_file;
+    TrMap* import_aliases;
 } Parser;
 static void _trdrop_Parser(void* vp) {
     Parser* self = (Parser*)vp; (void)self;
     _tr_str_release(self->src_text);
     _tr_str_release(self->current_file);
+    Dict_free_strval(self->import_aliases);
 }
 #endif
 
