@@ -2418,10 +2418,10 @@ extend Parser:
         if self.peek() == Token.Colon:
             self.pos = self.pos + 1
             mut gc = GenericConstraint.init(gname)
-            gc.bounds.push(box_asttype(AstType.init(self.consume_ident())))
+            gc.bounds.push(box_asttype(self.parse_type()))
             while self.peek() == Token.Plus:
                 self.pos = self.pos + 1
-                gc.bounds.push(box_asttype(AstType.init(self.consume_ident())))
+                gc.bounds.push(box_asttype(self.parse_type()))
             constraints.push(gc)
 
     pub def parse_function_def(self, is_method: bool) -> FunctionDef:
@@ -2562,12 +2562,16 @@ extend Parser:
         if self.peek() == Token.KwImplements:
             self.pos = self.pos + 1
             while True:
-                c.iface_names.push(self.consume_ident())
+                mut _im_name = self.consume_ident()
+                c.iface_names.push(_im_name)
+                mut _im_ty = AstType.init(_im_name)
                 if self.peek() == Token.LBracket:
                     self.pos = self.pos + 1
                     while self.peek() != Token.RBracket and self.peek() != Token.Eof:
-                        self.pos = self.pos + 1
+                        _im_ty.args.push(box_asttype(self.parse_type()))
+                        if self.peek() == Token.Comma: self.pos = self.pos + 1
                     if self.peek() == Token.RBracket: self.pos = self.pos + 1
+                c.iface_targs.push(box_asttype(_im_ty))
                 if self.peek() == Token.Comma:
                     self.pos = self.pos + 1
                 else: break

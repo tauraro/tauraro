@@ -187,6 +187,7 @@ pub class CGenerator:
     pub coll_field_disq: Map[str, bool]   # bare collection field NAME ever assigned a non-fresh (aliased) collection anywhere — disqualifies freeing that field (collections aren't refcounted, so an alias would double-free)
     pub cur_proven_borrows: Map[str, bool]  # outlives engine: ref-borrow locals whose source provably outlives them — refcount ELIDED (no retain at bind, no release at scope)
     pub cur_ret_is_borrow: bool  # current function's return type is `ref` — returns a BORROW (no retain on return; the caller does not free it)
+    pub cur_ret_ty: AstType      # current function's declared return type — used by SReturn to box a concrete class into an interface's dyn-dispatch wrapper (`Class_as_Iface`) when the signature says `-> SomeInterface`
     pub eliding_get_retain: bool # set while generating a PROVEN collection-element borrow's RHS (`ref T = coll.get(k)`) — the str-valued get returns the unboxed alias WITHOUT retaining (zero-copy borrow); the SLet also skips the release
     pub no_elide: bool           # --no-elide: force pure ARC (drop ALL proven-borrow elision) — the differential-soundness oracle baseline
     pub tier_define: str         # --freestanding => "TAURARO_KERNEL" (no libc), --no-std => "TAURARO_NO_OS" (no OS); emitted as a #define before the runtime include so the tier build "just works" without a hand-passed -D
@@ -267,6 +268,7 @@ pub class CGenerator:
         g.coll_field_disq = Map[str, bool].init(32)
         g.cur_proven_borrows = Map[str, bool].init(8)
         g.cur_ret_is_borrow = false
+        g.cur_ret_ty = AstType.init("void")
         g.eliding_get_retain = false
         g.no_elide = false
         g.tier_define = ""
@@ -382,6 +384,7 @@ pub class CGenerator:
         # A `-> ref` function returns a BORROW: it does NOT retain on return, and its
         # callers must NOT free the result (see _is_fresh_str_expr / _expr_is_borrow_call).
         self.cur_ret_is_borrow = f.ret_ty.is_borrow
+        self.cur_ret_ty = f.ret_ty
         mut pi = 0
         while pi < f.params.len:
             self.decl_vars.insert(f.params.get(pi).name, true)
@@ -1136,6 +1139,75 @@ pub class CGenerator:
         if targ == "void" or targ == gp or targ == "": return ""
         return targ
 
+    # Multi-generic sibling of infer_generic_targ: resolves ALL of a 2+-generic free
+    # function's type params from a call site with no explicit `f[T1, T2](..)` args.
+    # Pass 1 mirrors infer_generic_targ (a param declared directly as the generic
+    # param name gives its concrete type from the argument). Pass 2 handles generics
+    # that never appear as any param's own type but only inside another (now-resolved)
+    # param's BOUND, e.g. `RS` in `[C: DbConnection[RS], RS: DbResultSet]`: once `C`
+    # resolves to a concrete class, that class's OWN `implements DbConnection[MyRS]`
+    # declaration (see ClassDef.iface_targs) records RS's concrete binding. Iterates
+    # to a fixed point so chained cross-references resolve; returns an EMPTY Vec
+    # (distinct from a same-length-but-blank result) when any generic stays unresolved,
+    # so the caller can fall back to the (broken -> now just "not specialized") default.
+    pub def infer_generic_targs_multi(self, fname: str, args: Vec[Pointer[HirExpr]]) -> Vec[str]:
+        mut empty = Vec[str].init(0)
+        if not self.functions.contains(fname): return empty
+        mut fd = self.functions.get(fname)
+        if fd.class_name != "" or fd.generics.len < 2: return empty
+        if fd.params as usize == 0 as usize: return empty
+        mut sk = 0
+        if fd.params.len > 0 and fd.params.get(0).name == "self": sk = 1
+        mut resolved = Map[str, str].init(8)
+        mut pi = 0
+        while pi < fd.params.len:
+            mut pp = fd.params.get(pi)
+            if pp.name != "self":
+                mut aidx = pi - sk
+                if aidx >= 0 and aidx < args.len and fd.generics.contains(pp.ty.name) and not resolved.contains(pp.ty.name):
+                    mut _rtn = self.resolve_generic_tyname(hir_expr_type(args.get(aidx)).name)
+                    if _rtn != "" and _rtn != "void": resolved.insert(pp.ty.name, _rtn)
+            pi = pi + 1
+        mut progress = true
+        while progress:
+            progress = false
+            mut ci = 0
+            while ci < fd.constraints.len:
+                mut gc = fd.constraints.get(ci)
+                if resolved.contains(gc.target):
+                    mut concrete_x = resolved.get(gc.target)
+                    if self.classes.contains(concrete_x):
+                        mut concrete_cls = self.classes.get(concrete_x)
+                        mut bi = 0
+                        while bi < gc.bounds.len:
+                            mut bound_ty = gc.bounds.get(bi).read()
+                            if self.interfaces.contains(bound_ty.name) and bound_ty.args.len > 0:
+                                mut api = 0
+                                while api < bound_ty.args.len:
+                                    mut arg_nm = bound_ty.args.get(api).read().name
+                                    if fd.generics.contains(arg_nm) and not resolved.contains(arg_nm):
+                                        if concrete_cls.iface_names as usize != 0 as usize:
+                                            mut ifi = 0
+                                            while ifi < concrete_cls.iface_names.len:
+                                                if concrete_cls.iface_names.get(ifi) == bound_ty.name:
+                                                    if concrete_cls.iface_targs as usize != 0 as usize and ifi < concrete_cls.iface_targs.len:
+                                                        mut cls_iface_ty = concrete_cls.iface_targs.get(ifi).read()
+                                                        if api < cls_iface_ty.args.len:
+                                                            resolved.insert(arg_nm, cls_iface_ty.args.get(api).read().name)
+                                                            progress = true
+                                                ifi = ifi + 1
+                                    api = api + 1
+                            bi = bi + 1
+                ci = ci + 1
+        mut result = Vec[str].init(fd.generics.len)
+        mut gi2 = 0
+        while gi2 < fd.generics.len:
+            mut gn2 = fd.generics.get(gi2)
+            if not resolved.contains(gn2): return empty
+            result.push(resolved.get(gn2))
+            gi2 = gi2 + 1
+        return result
+
     # Ensure a monomorphized copy of a generic free function is generated. The
     # PROTOTYPE goes into mono_buf (flushed early, only forward-declared types
     # needed); the BODY goes into fn_mono_body (flushed after all prototypes, so
@@ -1143,21 +1215,38 @@ pub class CGenerator:
     # the shared header without a multi-TU duplicate-symbol clash — exactly like the
     # generic-class method monos.
     pub def ensure_mono_func(self, fname: str, targ: str):
-        mut mono_key = "func_" + fname + "__MONO_" + targ
+        mut targs = Vec[str].init(1)
+        targs.push(targ)
+        self.ensure_mono_func_n(fname, targs)
+
+    # Same as ensure_mono_func, generalized to a function with N (not just 1)
+    # generic type params — driven by an explicit multi-arg call `f[T1, T2](..)`
+    # (sema mangles the callee to `f__MONO_T1_T2`; see scan_mono_expr, which
+    # splits the joined suffix back into targs using f.generics.len).
+    pub def ensure_mono_func_n(self, fname: str, targs: Vec[str]):
+        mut joined = ""
+        mut jji = 0
+        while jji < targs.len:
+            if jji > 0: joined = joined + "_"
+            joined = joined + targs.get(jji)
+            jji = jji + 1
+        mut mono_key = "func_" + fname + "__MONO_" + joined
         if self.mono_done.contains(mono_key): return
         self.mono_done.insert(mono_key, true)
         if not self.functions.contains(fname): return
         mut f = self.functions.get(fname)
         if f.generics.len == 0: return
-        mut type_param = f.generics.get(0)
-        mut concrete_c = self.type_to_c(AstType.init(targ))
+        if f.generics.len != targs.len: return
         mut old_subst = self.type_subst
         self.type_subst = Map[str, str].init(4)
-        self.type_subst.insert(type_param, concrete_c)
+        mut tsi = 0
+        while tsi < f.generics.len:
+            self.type_subst.insert(f.generics.get(tsi), self.type_to_c(AstType.init(targs.get(tsi))))
+            tsi = tsi + 1
         mut old_buf = self.buf
         mut old_sbuf = self.struct_buf
         mut old_pbuf = self.proto_buf
-        mut mono_fname = fname + "__MONO_" + targ
+        mut mono_fname = fname + "__MONO_" + joined
         mut ret_s = self.type_to_c(f.ret_ty)
         mut sig = "static __attribute__((hot)) " + ret_s + " " + mono_fname + "("
         mut first = true
@@ -1925,10 +2014,46 @@ pub class CGenerator:
             self.ws("typedef struct { " + iface.name + "_vtable* vtable; void* data; } " + iface.name + "_obj;\n\n")
 
     # Build the static-inline _as_ wrap function string for one class+interface pair.
-    # Called from generate_types_header (appended after all prototypes).
-    pub def gen_one_iface_wrap(self, cls_name: str, iface: HirInterface) -> str:
-        mut s = "static inline " + iface.name + "_obj " + cls_name + "_as_" + iface.name + "(" + cls_name + "* self) {\n"
-        s = s + "    static const " + iface.name + "_vtable _vtbl_" + cls_name + "_" + iface.name + " = {\n"
+    # Called from generate_types_header (appended after all prototypes). `targs` are
+    # the CONCRETE generic args a non-generic class supplied for a generic interface
+    # (`class MyConn implements DbConnection[MyRS]:` -> targs=[MyRS]); empty when the
+    # interface isn't generic. When non-empty, the interface's vtable/obj typedefs
+    # (skipped by gen_interface_vtable for generic interfaces) are monomorphized here,
+    # named `<Iface>_<argsuffix>` (e.g. `DbConnection_MyRS`) exactly like a generic
+    # class's own monomorphization naming (type_args_suffix), and every method
+    # signature substitutes the interface's own generic param names for `targs`
+    # (`execute(self) -> RS` -> `MyRS*`).
+    pub def gen_one_iface_wrap(self, cls_name: str, iface: HirInterface, targs: Vec[Pointer[AstType]]) -> str:
+        mut mono_iface_name = iface.name
+        mut old_subst = self.type_subst
+        if iface.generics.len > 0 and targs.len > 0:
+            self.type_subst = Map[str, str].init(4)
+            mut gsi = 0
+            while gsi < iface.generics.len and gsi < targs.len:
+                self.type_subst.insert(iface.generics.get(gsi), self.type_to_c(targs.get(gsi).read()))
+                gsi = gsi + 1
+            mono_iface_name = iface.name + "_" + self.type_args_suffix(targs)
+        mut s = ""
+        if not self.emitted_fns.contains("iface_obj_" + mono_iface_name):
+            self.emitted_fns.insert("iface_obj_" + mono_iface_name, true)
+            s = s + "typedef struct _" + mono_iface_name + "_vtable {\n"
+            mut vi = 0
+            while vi < iface.methods.len:
+                mut vm = iface.methods.get(vi)
+                mut vret = self.type_to_c(vm.ret_ty)
+                s = s + "    " + vret + " (*" + vm.name + ")(void* self"
+                mut vj = 0
+                while vj < vm.params.len:
+                    mut vp = vm.params.get(vj)
+                    if vp.name != "self":
+                        s = s + ", " + self.type_to_c(vp.ty) + " " + vp.name
+                    vj = vj + 1
+                s = s + ");\n"
+                vi = vi + 1
+            s = s + "} " + mono_iface_name + "_vtable;\n\n"
+            s = s + "typedef struct { " + mono_iface_name + "_vtable* vtable; void* data; } " + mono_iface_name + "_obj;\n\n"
+        s = s + "static inline " + mono_iface_name + "_obj " + cls_name + "_as_" + mono_iface_name + "(" + cls_name + "* self) {\n"
+        s = s + "    static const " + mono_iface_name + "_vtable _vtbl_" + cls_name + "_" + mono_iface_name + " = {\n"
         mut mi = 0
         while mi < iface.methods.len:
             mut m = iface.methods.get(mi)
@@ -1944,8 +2069,9 @@ pub class CGenerator:
             s = s + "        ." + m.name + " = (" + cast_sig + ")(" + cls_name + "_" + m.name + "),\n"
             mi = mi + 1
         s = s + "    };\n"
-        s = s + "    return (" + iface.name + "_obj){ .vtable = (" + iface.name + "_vtable*)&_vtbl_" + cls_name + "_" + iface.name + ", .data = (void*)self };\n"
+        s = s + "    return (" + mono_iface_name + "_obj){ .vtable = (" + mono_iface_name + "_vtable*)&_vtbl_" + cls_name + "_" + mono_iface_name + ", .data = (void*)self };\n"
         s = s + "}\n"
+        self.type_subst = old_subst
         return s
 
     # -- Expression generation -------------------------------------------------
@@ -2842,6 +2968,27 @@ pub class CGenerator:
     # constructions and owned (`-> T`) call results are already rc=1 (no retain);
     # aliases (a tracked local, a field read) and `-> ref` borrows are retained.
     # Returning a tracked local transfers ownership (excluded from drops) → no retain.
+    # A function declared `-> SomeInterface` (a concrete interface name used directly as
+    # the return type, not a generic bound) type-checks a `return ConcreteClass(...)`
+    # under sema, but the C return slot is the interface's `{vtable*, data}` dyn-dispatch
+    # box (`SomeInterface_obj`), not the class's raw pointer — so the bare pointer needs
+    # boxing via the same `Class_as_Iface(...)` wrapper used for interface-typed params/
+    # locals. `s` is the already-fully-computed (retained/flushed) return expression;
+    # this only adds the box, so it is safe to apply as the last step before `return`.
+    pub def iface_wrap_return(self, e: Pointer[HirExpr], s: str) -> str:
+        if not self.interfaces.contains(self.cur_ret_ty.name): return s
+        mut _r_iface = self.interfaces.get(self.cur_ret_ty.name)
+        mut _r_iface_name = self.cur_ret_ty.name
+        if _r_iface.generics.len > 0 and self.cur_ret_ty.args.len > 0:
+            _r_iface_name = self.cur_ret_ty.name + "_" + self.type_args_suffix(self.cur_ret_ty.args)
+        mut _r_val_ty = hir_expr_type(e)
+        mut _r_val_ty_n = _r_val_ty.name
+        if not self.classes.contains(_r_val_ty_n): return s
+        mut _r_cls = self.classes.get(_r_val_ty_n)
+        if _r_cls.generics.len > 0 and _r_val_ty.args.len > 0:
+            _r_val_ty_n = _r_val_ty_n + "_" + self.type_args_suffix(_r_val_ty.args)
+        return _r_val_ty_n + "_as_" + _r_iface_name + "(" + s + ")"
+
     pub def obj_retain_wrap(self, e: Pointer[HirExpr], s: str, is_return: bool) -> str:
         if _is_invalid_ptr(e as usize): return s
         if not self.is_heap_class_tn(hir_expr_type(e).name): return s
@@ -3889,12 +4036,28 @@ pub class CGenerator:
             # Infer the single type param from a parameter declared directly as that
             # param (x: T), emit a monomorphized copy, and dispatch to it — zero-cost,
             # like a Rust generic. (Explicit fname[T](..) is mangled in sema and driven
-            # by the mono scan; multi-param generics keep the erased path for now.)
+            # by the mono scan.)
             if fn_def.class_name == "" and fn_def.generics.len == 1:
                 mut _targ = self.infer_generic_targ(callee_s, args)
                 if _targ != "":
                     self.ensure_mono_func(callee_s, _targ)
                     return callee_s + "__MONO_" + _targ + "(" + self.gen_args(args) + ")"
+            # Multi-param generic free function called by inference: as above, but for
+            # 2+ generics — one inferred directly from a param, the rest (if any) cross-
+            # referenced from that concrete type's own generic-interface bounds (e.g. `RS`
+            # in `[C: DbConnection[RS], RS: DbResultSet]` isn't any param's own type, but
+            # `class MyConn implements DbConnection[MyRS]` records what RS resolves to).
+            elif fn_def.class_name == "" and fn_def.generics.len > 1:
+                mut _targs_m = self.infer_generic_targs_multi(callee_s, args)
+                if _targs_m.len == fn_def.generics.len:
+                    self.ensure_mono_func_n(callee_s, _targs_m)
+                    mut _tjoined = ""
+                    mut _tji = 0
+                    while _tji < _targs_m.len:
+                        if _tji > 0: _tjoined = _tjoined + "_"
+                        _tjoined = _tjoined + _targs_m.get(_tji)
+                        _tji = _tji + 1
+                    return callee_s + "__MONO_" + _tjoined + "(" + self.gen_args(args) + ")"
             mut any_wrapped = false
             mut ai = 0
             while ai < args.len:
@@ -6867,22 +7030,22 @@ pub class CGenerator:
                         if self.cur_ret_is_borrow:
                             # `-> ref` function: hand back the borrow as-is. No retain — the
                             # caller treats the result as a borrow and will not free it.
-                            self.w(pad + "return " + ret_s2 + ";\n")
+                            self.w(pad + "return " + self.iface_wrap_return(e, ret_s2) + ";\n")
                         elif self._expr_is_borrow_call(e):
                             # Owned-return function returning a `-> ref` call result: the
                             # callee did NOT retain, so OWN it here (retain) before handing
                             # it back as an owned value the caller will free.
                             if self.is_heap_class_tn(hir_expr_type(e).name):
-                                self.w(pad + "return _tr_obj_retain(" + ret_s2 + ");\n")
+                                self.w(pad + "return " + self.iface_wrap_return(e, "_tr_obj_retain(" + ret_s2 + ")") + ";\n")
                             elif _is_str_type(hir_expr_type(e).name):
                                 self.w(pad + "return _tr_str_retain(" + ret_s2 + ");\n")
                             else:
-                                self.w(pad + "return " + ret_s2 + ";\n")
+                                self.w(pad + "return " + self.iface_wrap_return(e, ret_s2) + ";\n")
                         else:
                             # str + heap-class owned returns: retain a borrowed/aliased
                             # result (self, a field) so the caller owns a counted ref;
                             # a returned local transfers (no retain — excluded from drops).
-                            self.w(pad + "return " + self.obj_retain_wrap(e, self.str_retain_wrap(e, ret_s2, true), true) + ";\n")
+                            self.w(pad + "return " + self.iface_wrap_return(e, self.obj_retain_wrap(e, self.str_retain_wrap(e, ret_s2, true), true)) + ";\n")
             case HirStmt.SLet(n, _, _, is_const, is_shared, ty, v):
                 # Record a generic-class local's mono C prefix up front (before any
                 # branch), so an SAutoDrop free/drop names the concrete instance. The
@@ -8578,12 +8741,19 @@ pub class CGenerator:
                                 mut gfunc_n = mn.slice(0, sep_p)
                                 mut gfunc_t = mn.slice(sep_p + 7, nlen)
                                 if self.functions.contains(gfunc_n):
-                                    self.ensure_mono_func(gfunc_n, gfunc_t)
+                                    mut _gf = self.functions.get(gfunc_n)
+                                    if _gf.generics.len > 1:
+                                        self.ensure_mono_func_n(gfunc_n, gfunc_t.split("_"))
+                                    else:
+                                        self.ensure_mono_func(gfunc_n, gfunc_t)
                         else:
                             # Inference call (no explicit [T]): specialize before the
                             # mono buffer is flushed so the copy + prototype exist.
                             mut _sit = self.infer_generic_targ(mn, args)
                             if _sit != "": self.ensure_mono_func(mn, _sit)
+                            elif self.functions.contains(mn):
+                                mut _sit_m = self.infer_generic_targs_multi(mn, args)
+                                if _sit_m.len > 0: self.ensure_mono_func_n(mn, _sit_m)
                     case _: pass
             case HirExpr.EMethodCall(obj, mmeth, margs, _):
                 self.scan_mono_expr(obj)
@@ -9289,7 +9459,10 @@ pub class CGenerator:
                         if self.interfaces.contains(wiface_name):
                             mut wiface = self.interfaces.get(wiface_name)
                             if not _is_invalid_ptr(wiface as usize):
-                                out.append(self.gen_one_iface_wrap(wcls.name, wiface))
+                                mut wtargs = Vec[Pointer[AstType]].init(0)
+                                if wcls.iface_targs as usize != 0 as usize and not _is_invalid_ptr(wcls.iface_targs as usize) and wii < wcls.iface_targs.len:
+                                    wtargs = wcls.iface_targs.get(wii).read().args
+                                out.append(self.gen_one_iface_wrap(wcls.name, wiface, wtargs))
                                 out.append("\n")
                         wii = wii + 1
             wi = wi + 1
