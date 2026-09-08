@@ -19,5 +19,11 @@ if (-not (Test-Path build/main.c)) { Write-Error "emit failed: build/main.c miss
 Remove-Item -Recurse -Force bootstrap/c -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force bootstrap | Out-Null
 Copy-Item -Recurse build bootstrap/c
+
+# The in-process LLVM shim (stub by default) must be in the C seed so the stage0 build
+# resolves _tr_llvm_emit_object. The stage0 command globs bootstrap/c/module_*.c, so copy
+# it in under a module_* name to be picked up without changing the seed compile line.
+Copy-Item runtime/tauraro_llvm.c bootstrap/c/module_tauraro_llvm.c
+
 $n = (Get-ChildItem -Recurse -File bootstrap/c).Count
 Write-Host "==> Regenerated bootstrap/c/ ($n files). Review + commit the tree."
