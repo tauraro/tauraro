@@ -2993,6 +2993,27 @@ extend Sema:
         while i < self.current_func_generics.len:
             if self.current_func_generics.get(i) == name: return true
             i = i + 1
+        # A multi-character name can ALSO be an in-scope type parameter of the
+        # ENCLOSING CLASS (e.g. `RS` in `class Engine[C: DbConnection[RS], RS:
+        # DbResultSet]:`), not just the current function's own generics --
+        # `wrap`/other methods on Engine aren't independently generic
+        # themselves, they inherit Engine's type params, so
+        # current_func_generics alone never contains them. Without this, a
+        # multi-character class-level type parameter used in a
+        # self-referencing recursive site (`Engine[C, RS]()` inside Engine's
+        # own `extend` block) was only ever accepted by the strlen==1
+        # shortcut above -- confirmed a real bug: renaming a class's own
+        # second type parameter from `RS` to `R` alone made an otherwise
+        # identical bound check pass instead of falsely failing with "Type
+        # 'RS' does not satisfy the bound 'DbResultSet'" (RS being checked
+        # against its own bound as if it were a real concrete type, not the
+        # already-constrained abstract parameter it is).
+        if self.current_class_name != "" and self.classes.contains(self.current_class_name):
+            mut ccls = self.classes.get(self.current_class_name)
+            mut ci = 0
+            while ci < ccls.generics.len:
+                if ccls.generics.get(ci) == name: return true
+                ci = ci + 1
         return false
 
     pub def _type_satisfies_bound(self, type_name: str, iface_name: str) -> bool:
@@ -5680,6 +5701,19 @@ extend Sema:
                         if _fld.name == prop:
                             if _fld.ty as usize != 0 as usize: ret_ty = _fld.ty.read()
                         _fi = _fi + 1
+                    # Substitute generic type params on the FIELD's type, same as the
+                    # EMethodCall case above already does for a method's return type
+                    # (e.g. `engine.conn` where `conn: C` and `engine: Engine[MyConn,
+                    # MyRS]` must type as MyConn, not the literal, still-abstract "C").
+                    # Without this, a call chained off the field (`engine.conn.
+                    # execute(...)`) has nothing but the bare type-parameter name to
+                    # dispatch on, and codegen -- which resolves a method call's C
+                    # prefix from the HIR receiver type -- emits a bare, unqualified
+                    # call using that literal name (`C_execute`) instead of the
+                    # resolved concrete class's (`MyConn_execute`), an undefined-
+                    # reference compile error. Confirmed with a minimal repro.
+                    if _cls.generics.len > 0 and hobj_ty_full.args.len > 0:
+                        ret_ty = self._subst_ret_generics(ret_ty, _cls.generics, hobj_ty_full.args)
                 elif self.enums.contains(hobj_ty_n):
                     # `EnumType.Variant` (no call) - the value's type is the enum itself.
                     ret_ty = AstType.init(hobj_ty_n)

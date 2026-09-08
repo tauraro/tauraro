@@ -875,6 +875,22 @@ pub class CGenerator:
             elif cv == "short": tn = "i16"
             elif cv == "signed char": tn = "i8"
             elif cv == "float": tn = "f32"
+            else:
+                # A generic param bound to a user-class/struct pointer (e.g. the C of
+                # Engine[C, R] substituted to "MyConn*") mono-suffixes to the POINTEE
+                # struct name ("MyConn") -- matching type_args_suffix's identical
+                # special-case (see its own comment) -- not "MyConn_ptr", which
+                # type_suffix's generic "ends in '*'" rule would otherwise produce.
+                # Without this, a class constructor call's own type-arg-driven suffix
+                # (type_args_suffix, used when explicit args are present on the call)
+                # and this active-type_subst-driven suffix (used when they're absent,
+                # e.g. the declared type of `mut e = Engine[C, R]()`'s LHS inside a
+                # monomorphized method body) disagree on the same instantiation's
+                # name -- confirmed as a real bug producing two different C struct
+                # names (Engine_MyConn_MyRS vs Engine_MyConn_ptr_MyRS_ptr) for the
+                # same type, an immediate incompatible-pointer-types compile error.
+                if tn.ends_with("*"):
+                    tn = tn.slice(0, tn.len() - 1)
             sfx = sfx + self.type_suffix(tn)
             gi = gi + 1
         return sfx
@@ -1024,8 +1040,19 @@ pub class CGenerator:
             mut m = cls.methods.get(mi)
             mut old_class = self.cur_class
             mut old_func  = self.cur_func
+            # A monomorphized method's own `throws` annotation must be visible to
+            # gen_func_body's SReturn handling the same way every OTHER
+            # method-body-generation site (generate_module_c, generate(), ...)
+            # already sets it -- this loop was the one place that didn't.
+            # Without it, a generic method declared `throws E -> T` (e.g.
+            # Engine[C,R].execute()) falls through to the non-throws return
+            # path: a bare `return value;` where a `Result`-wrapped value is
+            # expected everywhere the function is called, an immediate
+            # incompatible-types compile error at every call site.
+            mut old_throws = self.cur_throws_ty
             self.cur_class = mono_name
             self.cur_func  = m.name
+            self.cur_throws_ty = m.throws_ty.name
             self.decl_vars = Map[str, bool].init(64)
             self.str_local_names = Map[str, bool].init(16)
             self.coll_local_sfx = Map[str, str].init(16)
@@ -1041,6 +1068,7 @@ pub class CGenerator:
             self.w("}\n\n")
             self.cur_class = old_class
             self.cur_func  = old_func
+            self.cur_throws_ty = old_throws
             mi = mi + 1
         self.fn_mono_body = self.buf
         self.buf        = _cmb_obuf
