@@ -2232,6 +2232,16 @@ extend Sema:
     # scope/global symbol: a user function, class, enum, interface, type alias, or
     # built-in type name. Used to avoid false "undefined name" errors.
     pub def is_known_name(self, name: str) -> bool:
+        # An in-scope generic type parameter (`T` in `def build[T](...) -> T:`,
+        # or a class's own `[T]` used inside its methods) is a legitimate bare
+        # name to reference even though it resolves to no variable/function/
+        # class -- e.g. `T()` (default-constructing the eventual concrete type)
+        # inside a generic function. Without this, `T()` failed at sema with
+        # "[N-3] name 'T' is not defined" before ever reaching codegen, even
+        # though the analogous `T.static_method(...)`/`obj.field` patterns on a
+        # generic-typed value are allowed elsewhere precisely because a generic
+        # type parameter is a legitimate, if erased-until-monomorphization, name.
+        if self._is_type_param_in_scope(name): return true
         if self.fn_sigs.contains(name): return true
         if self.extern_names.contains(name): return true
         if self.classes.contains(name): return true
@@ -5075,6 +5085,15 @@ extend Sema:
                             ret_ty = AstType.init(n)
                         elif self.enums.contains(n):
                             ret_ty = AstType.init(n)
+                        # `T()` inside a generic function/method: default-construct the
+                        # eventual concrete type substituted for the type parameter `T`.
+                        # `ret_ty` stays the ERASED name "T" here (matching how a generic
+                        # method's own `-> T` return type is already represented
+                        # pre-monomorphization elsewhere) -- codegen's own construction
+                        # dispatch resolves it through `type_subst` once a concrete type
+                        # is known, the same mechanism already used for `T.static_method()`.
+                        elif self.resolve(n).name == "" and self._is_type_param_in_scope(n):
+                            ret_ty = AstType.init(n)
                         elif (n == "abs" or n == "min" or n == "max") and _hl_has_float(hl):
                             ret_ty = AstType.init("float")   # abs/min/max are float-in -> float-out
                         elif n == "c_callback":
@@ -5693,6 +5712,51 @@ extend Sema:
                         ret_ty = self._subst_ret_generics(ret_ty, _cls.generics, hobj_ty.args)
                 return box_hirexpr(HirExpr.EMethodCall(hobj, method, hl, ret_ty))
             case Expr.EPropAccess(obj, prop):
+                # A bare class-name property access naming one of the class's own
+                # STATIC methods (`Foo.make`, no immediate call after it) is a
+                # reference to that method as a first-class `def(...)->R` VALUE --
+                # mirrors how a plain top-level function name already carries its
+                # `def(...)->R` signature when used as a value (see `fn_sigs`
+                # above/`sym.kind == SymbolKind.SFunction` case). Must be checked
+                # before the general EPropAccess/field-access lowering below:
+                # `obj` here is the class's bare NAME with no variable of that name
+                # in scope (`self.resolve` returns an empty symbol), so falling
+                # through unconditionally used to treat "Foo" as if it held an
+                # instance, generating `Foo->make` in the C backend -- reproduced
+                # directly (`Foo.make` assigned to a `def(int)->Foo` local, or
+                # passed as a bare call argument, both without an immediate `(...)`
+                # right after `.make`; `Foo.make(n)`, an immediate call, was
+                # already correct via a separate code path and is unaffected).
+                match obj.read():
+                    case Expr.EIdent(_pmv_cn):
+                        mut _pmv_sym = self.resolve(_pmv_cn)
+                        if _pmv_sym.name == "" and self.classes.contains(_pmv_cn) and self.class_method_exists(_pmv_cn, prop):
+                            mut _pmv_cls = self.classes.get(_pmv_cn)
+                            mut _pmv_m = _pmv_cls.methods.get(0)
+                            mut _pmv_found = false
+                            mut _pmv_mi = 0
+                            while _pmv_mi < _pmv_cls.methods.len:
+                                mut _pmv_mm = _pmv_cls.methods.get(_pmv_mi)
+                                if _pmv_mm.name == prop:
+                                    mut _pmv_is_static = true
+                                    if _pmv_mm.params.len > 0 and _pmv_mm.params.get(0).name == "self":
+                                        _pmv_is_static = false
+                                    if _pmv_is_static:
+                                        _pmv_m = _pmv_mm
+                                        _pmv_found = true
+                                _pmv_mi = _pmv_mi + 1
+                            if _pmv_found:
+                                mut _pmv_fnty = AstType.init("def")
+                                mut _pmv_pi = 0
+                                while _pmv_pi < _pmv_m.params.len:
+                                    _pmv_fnty.args.push(_pmv_m.params.get(_pmv_pi).ty)
+                                    _pmv_pi = _pmv_pi + 1
+                                if _pmv_m.ret_ty as usize != 0 as usize:
+                                    _pmv_fnty.args.push(_pmv_m.ret_ty)
+                                else:
+                                    _pmv_fnty.args.push(box_asttype(AstType.init("void")))
+                                return box_hirexpr(HirExpr.EIdent(_pmv_cn + "_" + prop, _pmv_fnty, false))
+                    case _: pass
                 mut _saved_recv_pa = self.in_recv_pos
                 self.in_recv_pos = true
                 mut hobj = self.lower_expr(obj)

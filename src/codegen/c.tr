@@ -3023,11 +3023,21 @@ pub class CGenerator:
     # locals. `s` is the already-fully-computed (retained/flushed) return expression;
     # this only adds the box, so it is safe to apply as the last step before `return`.
     pub def iface_wrap_return(self, e: Pointer[HirExpr], s: str) -> str:
-        if not self.interfaces.contains(self.cur_ret_ty.name): return s
-        mut _r_iface = self.interfaces.get(self.cur_ret_ty.name)
-        mut _r_iface_name = self.cur_ret_ty.name
-        if _r_iface.generics.len > 0 and self.cur_ret_ty.args.len > 0:
-            _r_iface_name = self.cur_ret_ty.name + "_" + self.type_args_suffix(self.cur_ret_ty.args)
+        return self.iface_wrap_to(self.cur_ret_ty, e, s)
+
+    # General form of the interface-boxing fix above: box `s` (the already-fully-
+    # computed value expression for `e`) into `Class_as_Iface(...)` when `target_ty`
+    # is a registered interface and `e`'s own static type is a concrete class — used
+    # by both `return` (target_ty = cur_ret_ty) and plain assignment `lhs = rhs`
+    # (target_ty = the lhs's declared type, e.g. an interface-typed field/local).
+    # A no-op (returns `s` unchanged) whenever target_ty isn't an interface or `e`
+    # isn't a concrete class, so it's always safe to call speculatively.
+    pub def iface_wrap_to(self, target_ty: AstType, e: Pointer[HirExpr], s: str) -> str:
+        if not self.interfaces.contains(target_ty.name): return s
+        mut _r_iface = self.interfaces.get(target_ty.name)
+        mut _r_iface_name = target_ty.name
+        if _r_iface.generics.len > 0 and target_ty.args.len > 0:
+            _r_iface_name = target_ty.name + "_" + self.type_args_suffix(target_ty.args)
         mut _r_val_ty = hir_expr_type(e)
         mut _r_val_ty_n = _r_val_ty.name
         if not self.classes.contains(_r_val_ty_n): return s
@@ -3941,7 +3951,18 @@ pub class CGenerator:
 
         # Class constructor call: ClassName() or GenericClass[T]()
         match callee.read():
-            case HirExpr.EIdent(n, ident_ty, _):
+            case HirExpr.EIdent(n0, ident_ty, _):
+                # `T()` inside a monomorphized generic body: `n0` is still the literal,
+                # erased type-parameter name ("T") -- resolve it through the active
+                # substitution to the concrete type actually being constructed here,
+                # same mechanism already used to resolve `T.static_method()` and
+                # duck-typed field access through a generic-typed receiver elsewhere
+                # in this file. Without this, `self.classes.contains(n0)` below is
+                # false for "T" (it's never a registered class), and construction
+                # falls through to the generic call fallback, emitting a bogus `T()`
+                # call to an undeclared function instead of allocating the real type.
+                mut n = n0
+                if self.type_subst.contains(n): n = self.resolve_generic_tyname(n)
                 if self.classes.contains(n) and n != "Vec" and n != "Map" and n != "Dict" and n != "List":
                     mut ucls = self.classes.get(n)
                     # Value type (@value_type): construct on the STACK by value, no
@@ -4653,12 +4674,23 @@ pub class CGenerator:
                 return "_tr_ptr_to_f64((void*)(uintptr_t)" + _tslot + ")"
             return _tslot
 
-        # Fallback: when HIR stores void for an EPropAccess type (cross-module field lookup),
-        # recover the actual type from the parent class field declaration
+        # Fallback: when HIR stores void for an EPropAccess type (cross-module field lookup,
+        # or a field read off a generic-param-typed receiver whose real field types can't be
+        # known until monomorphization -- e.g. `obj.n.to_str()` where `obj: T`), recover the
+        # actual type from the parent class field declaration.
         if t_n == "void" or t_n == "":
             match obj.read():
                 case HirExpr.EPropAccess(inner_obj_fb, field_name_fb, _):
                     mut inner_t_n_fb: str = hir_expr_type(inner_obj_fb).name
+                    # Inside a monomorphized body, the inner receiver may still carry its
+                    # DECLARED generic param name (e.g. "T") rather than the concrete type
+                    # substituted for it -- resolve that first, same as this function's own
+                    # `t_n` above, or the field lookup below never matches any real class and
+                    # `t_n` is left unresolved, silently dropping the method call in codegen
+                    # (e.g. `obj.n.to_str()` compiling to just `obj->n`, an int where a TrStr
+                    # was expected).
+                    if self.type_subst.contains(inner_t_n_fb):
+                        inner_t_n_fb = self.resolve_generic_tyname(inner_t_n_fb)
                     if inner_t_n_fb == "void" or inner_t_n_fb == "":
                         inner_t_n_fb = self.cur_class
                     if self.classes.contains(inner_t_n_fb):
@@ -5360,6 +5392,18 @@ pub class CGenerator:
         # Also recover for built-in collection types used in static calls (Vec.init, List.init, etc.)
         if (class_name == "void" or class_name == "") and (obj_s == "Vec" or obj_s == "List" or obj_s == "Map" or obj_s == "Dict"):
             class_name = obj_s
+        # Static call through a GENERIC TYPE PARAMETER inside a monomorphized body
+        # (`T.make(n)` where `[T]` is the enclosing generic function/method's own
+        # type param, `obj_s` is the literal parameter name "T"): sema can't resolve
+        # `T`'s type before monomorphization (it isn't a registered class, so
+        # `hir_expr_type(obj)` is void/empty, same as the ordinary static-call case
+        # just above), but by the time THIS body is generated, `self.type_subst`
+        # already maps "T" to the concrete C type for this monomorphization.
+        # Without this, the call silently fell through further below to a bare
+        # global-function fallback, emitting `make(T, n)` (an undeclared `make`
+        # called with the undeclared identifier `T`) instead of `Foo_make(n)`.
+        if (class_name == "void" or class_name == "") and self.type_subst.contains(obj_s):
+            class_name = self.resolve_generic_tyname(obj_s)
 
         # StringBuilder special handling (must be before len/length shortcut)
         if class_name == "StringBuilder":
@@ -5455,12 +5499,27 @@ pub class CGenerator:
         if self.classes.contains(class_name) and class_name != "Vec" and class_name != "Map" and class_name != "Dict" and class_name != "List":
             # Generic METHOD (its own `[T]`): monomorphize per inferred type arg and
             # dispatch to the specialized copy (like a generic free function, but with self).
-            mut _mtarg = self.infer_method_targ(class_name, method, args)
-            if _mtarg != "":
-                self.ensure_mono_method(class_name, method, _mtarg)
-                mut _mm = class_name + "_" + method + "__MONO_" + _mtarg + "(" + obj_s
-                if args.len > 0: _mm = _mm + ", " + self.gen_args(args)
-                return _mm + ")"
+            # Only when the ENCLOSING CLASS ITSELF is non-generic (`Wrapper.echo[T]` on a
+            # plain `class Wrapper:`) -- a method's `[T]` on an ALREADY-generic class
+            # (`class Bag[T]:` ... `def add[T](self, obj: T):`, repeating the class's own
+            # T per convention, not introducing a distinct one) is already covered by the
+            # class-level monomorphization (`Bag_Foo_add`, emitted alongside `Bag_Foo`
+            # itself), which handles the correct `self` type. Without this guard,
+            # `infer_method_targ` still matches (the method's generics list is non-empty
+            # and its param type name equals the class's own generic name), and
+            # `ensure_mono_method` wrongly treats it as the OTHER case, emitting a
+            # `<Cls>_<method>__MONO_<targ>` forward declaration typed `Cls* self` --
+            # `Cls` being the bare, un-monomorphized generic class name, which doesn't
+            # exist as a C type (`unknown type name 'Bag'`), alongside a conflicting,
+            # correctly-mangled `Cls_Targ_method` definition from the real path.
+            mut _cls_for_mtarg = self.classes.get(class_name)
+            if _cls_for_mtarg.generics.len == 0:
+                mut _mtarg = self.infer_method_targ(class_name, method, args)
+                if _mtarg != "":
+                    self.ensure_mono_method(class_name, method, _mtarg)
+                    mut _mm = class_name + "_" + method + "__MONO_" + _mtarg + "(" + obj_s
+                    if args.len > 0: _mm = _mm + ", " + self.gen_args(args)
+                    return _mm + ")"
             mut method_c: str = method
             if _is_c_keyword(method_c): method_c = "_tr_fn_" + method_c
             if method == "init" or method == "new":
@@ -5842,7 +5901,14 @@ pub class CGenerator:
                 if method == "get_or" and args.len >= 2:
                     return "(" + dp + "_has(" + obj_s + ", " + dkey + ") ? " + dp + "_get(" + obj_s + ", " + dkey + ") : (" + self.gen_expr(args.get(1)) + "))"
             if method == "init" or method == "new":
-                if is_idict: return "_tr_idict_new(" + self.gen_args(args) + ")"
+                # _tr_dict_new/_tr_idict_new take a required capacity-hint arg; a bare
+                # `Dict[K,V].init()` (no args) must default it, same as Set[T]/List[T]'s
+                # own no-arg .init() do — otherwise this forwarded zero args straight
+                # into a 1-arg C function ("too few arguments to function").
+                if is_idict:
+                    if args.len == 0: return "_tr_idict_new(16)"
+                    return "_tr_idict_new(" + self.gen_args(args) + ")"
+                if args.len == 0: return "_tr_dict_new(16)"
                 return "_tr_dict_new(" + self.gen_args(args) + ")"
             # `get_index` is the desugaring of d[key] (read context); treat it
             # exactly like `.get` so str values are unboxed.
@@ -7580,6 +7646,11 @@ pub class CGenerator:
                             return
                         case _: pass
                     _assign_rhs = _crhs
+                # Assigning a concrete class value into an interface-typed slot (a field,
+                # since a bare-identifier local's first assignment is handled above at
+                # decl_vars/global_vars time): box it into the vtable-dispatch wrapper,
+                # same as SLet/return/call-arg sites already do.
+                _assign_rhs = self.iface_wrap_to(hir_expr_type(t), v, _assign_rhs)
                 self.w(pad + self.gen_expr(t) + " = " + _assign_rhs + ";\n")
             case HirStmt.SIf(c, t, e):
                 self.w(pad + "if (" + self.gen_cond_expr(c) + ") {\n")
@@ -8809,10 +8880,16 @@ pub class CGenerator:
                     self.scan_mono_expr(margs.get(ei2))
                     ei2 = ei2 + 1
                 # Generic-method call: specialize before the mono buffer is flushed.
+                # Guarded the same way as the call-site dispatch above: only for a
+                # method's OWN `[T]` on an otherwise non-generic class -- an
+                # already-generic class's method repeating the class's own `[T]` is
+                # covered by class-level monomorphization already.
                 mut _rcn = hir_expr_type(obj).name
                 if self.classes.contains(_rcn):
-                    mut _mt = self.infer_method_targ(_rcn, mmeth, margs)
-                    if _mt != "": self.ensure_mono_method(_rcn, mmeth, _mt)
+                    mut _rcn_cls = self.classes.get(_rcn)
+                    if _rcn_cls.generics.len == 0:
+                        mut _mt = self.infer_method_targ(_rcn, mmeth, margs)
+                        if _mt != "": self.ensure_mono_method(_rcn, mmeth, _mt)
             case HirExpr.EBinOp(_, bl, br, _):
                 self.scan_mono_expr(bl)
                 self.scan_mono_expr(br)
