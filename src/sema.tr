@@ -5730,7 +5730,14 @@ extend Sema:
                 match obj.read():
                     case Expr.EIdent(_pmv_cn):
                         mut _pmv_sym = self.resolve(_pmv_cn)
-                        if _pmv_sym.name == "" and self.classes.contains(_pmv_cn) and self.class_method_exists(_pmv_cn, prop):
+                        # A class name is itself a registered `SymbolKind.SClass` symbol
+                        # (declared alongside the class, see `Decl.DClass` handling above)
+                        # -- NOT an empty/unresolved symbol as originally assumed here. An
+                        # actual instance VARIABLE named "Foo" would resolve to a
+                        # DIFFERENT kind (SVariable/SParam/...), so checking the kind
+                        # (rather than emptiness) is what correctly distinguishes "Foo" the
+                        # bare class name from a same-named local shadowing it.
+                        if (_pmv_sym.name == "" or _pmv_sym.kind == SymbolKind.SClass) and self.classes.contains(_pmv_cn) and self.class_method_exists(_pmv_cn, prop):
                             mut _pmv_cls = self.classes.get(_pmv_cn)
                             mut _pmv_m = _pmv_cls.methods.get(0)
                             mut _pmv_found = false

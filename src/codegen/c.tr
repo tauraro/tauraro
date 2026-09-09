@@ -5524,7 +5524,18 @@ pub class CGenerator:
             if _is_c_keyword(method_c): method_c = "_tr_fn_" + method_c
             if method == "init" or method == "new":
                 return class_name + "_" + method_c + "(" + self.gen_args(args) + ")"
-            if obj_s == class_name:
+            # `obj_s == class_name` catches an ordinary bare-class-name static call
+            # (`Foo.make(n)`, `obj_s` IS the literal text "Foo"). A static call
+            # through a GENERIC TYPE PARAMETER (`T.make(n)` inside a monomorphized
+            # body) has `obj_s == "T"` -- the literal, unresolved parameter name --
+            # even though `class_name` was already resolved to the concrete type
+            # above, so this equality alone misses it and falls through to the
+            # INSTANCE-call path below, wrongly prepending "T" as an extra first
+            # argument (`Foo_make(T, n)`, "T" undeclared). `self.type_subst.
+            # contains(obj_s)` catches that case: a name only appears there when
+            # it's a generic type parameter being substituted, which can only mean
+            # this was a static reference through `T`, never a real instance value.
+            if obj_s == class_name or self.type_subst.contains(obj_s):
                 return class_name + "_" + method_c + "(" + self.gen_args(args) + ")"
             # Check if method exists in own class; if not, fall back to base class dispatch
             mut ucls_inh: HirClass = self.classes.get(class_name)
