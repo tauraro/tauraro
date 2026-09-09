@@ -2302,6 +2302,41 @@ extend Sema:
                 case _: pass
             ppi = ppi + 1
 
+        # Pre-register module-level `mut`/`let` globals (parsed as DTopLevelStmt
+        # wrapping an SLet) so a function TEXTUALLY BEFORE the global in the same
+        # file can still resolve it. Without this, name resolution is a single
+        # sequential pass over prog.decls that both registers a global's symbol
+        # AND lowers function bodies in file order — a function reads a global
+        # declared later in the same file and self.declare(name, ...) for that
+        # global hasn't run yet, so resolve() reports "not defined" (misattributed
+        # to whichever call site happens to trigger it, e.g. an importing file's
+        # line, since the error is raised lazily at first use). Only registers
+        # the NAME+TYPE (an explicit annotation, or a plain-literal inference that
+        # can't have side effects) — never lowers the initializer expression here,
+        # so no analysis (move-tracking, borrow-region derivation, ...) runs twice;
+        # the real lowering still happens in its natural position below.
+        mut gpi = 0
+        while gpi < prog.decls.len:
+            match prog.decls.get(gpi).read():
+                case Decl.DTopLevelStmt(gs):
+                    match gs.read():
+                        case Stmt.SLet(g_name, _, g_is_mut, _, _, g_ty_ptr, g_val_ptr):
+                            mut g_ty = 0 as Pointer[AstType]
+                            if g_ty_ptr as usize != 0 as usize:
+                                g_ty = g_ty_ptr
+                            elif g_val_ptr as usize != 0 as usize:
+                                match g_val_ptr.read():
+                                    case Expr.ELitInt(_): g_ty = box_asttype(AstType.init("int"))
+                                    case Expr.ELitFloat(_): g_ty = box_asttype(AstType.init("float"))
+                                    case Expr.ELitStr(_): g_ty = box_asttype(AstType.init("str"))
+                                    case Expr.ELitBool(_): g_ty = box_asttype(AstType.init("bool"))
+                                    case _: pass
+                            if g_ty as usize != 0 as usize:
+                                self.declare(g_name, SymbolKind.SVariable, g_ty, g_is_mut)
+                        case _: pass
+                case _: pass
+            gpi = gpi + 1
+
         mut i = 0
         while i < prog.decls.len:
             self.register_decl(prog.decls.get(i))

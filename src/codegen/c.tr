@@ -1275,7 +1275,16 @@ pub class CGenerator:
         mut old_sbuf = self.struct_buf
         mut old_pbuf = self.proto_buf
         mut mono_fname = fname + "__MONO_" + joined
+        # A `throws`-declared function's C return type is ALWAYS `Result`,
+        # regardless of its own declared success type -- matching
+        # gen_func_sig's identical check for the non-monomorphized case.
+        # Missing here meant a monomorphized generic free function's
+        # signature used its bare success type (e.g. plain `int` for a
+        # `-> bool`) instead, an immediate "invalid initializer" at any
+        # call site assigning the call to a `Result`-typed variable, since
+        # every caller of a throws-declared function expects `Result` back.
         mut ret_s = self.type_to_c(f.ret_ty)
+        if f.throws_ty.name != "": ret_s = "Result"
         mut sig = "static __attribute__((hot)) " + ret_s + " " + mono_fname + "("
         mut first = true
         mut pi = 0
@@ -1302,8 +1311,17 @@ pub class CGenerator:
         self.proto_buf  = mono_body_sb
         mut old_class = self.cur_class
         mut old_func = self.cur_func
+        # Same fix as ensure_mono's (class-method) monomorphization loop:
+        # this is a SEPARATE code path (free FUNCTIONS with N type params,
+        # vs. a class's own generic methods) that had the identical gap --
+        # a monomorphized function's own `throws` annotation must be
+        # visible to gen_func_body's SReturn handling, or a `return`
+        # statement emits a bare, unwrapped value instead of a
+        # `Result`-wrapped one.
+        mut old_throws = self.cur_throws_ty
         self.cur_class = ""
         self.cur_func = mono_fname
+        self.cur_throws_ty = f.throws_ty.name
         self.decl_vars = Map[str, bool].init(64)
         self.str_local_names = Map[str, bool].init(16)
         self.coll_local_sfx = Map[str, str].init(16)
@@ -1320,6 +1338,7 @@ pub class CGenerator:
         self.w("}\n\n")
         self.cur_class = old_class
         self.cur_func = old_func
+        self.cur_throws_ty = old_throws
         self.fn_mono_body.append(mono_body_sb.to_string().as_str())
         self.buf = old_buf
         self.struct_buf = old_sbuf
