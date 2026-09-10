@@ -351,6 +351,8 @@ __attribute__((malloc,returns_nonnull,hot)) ClassDef* ClassDef_init(TrStr name) 
     /* pass */
     c->iface_names = (void*)List_TrStr_new();
     /* pass */
+    c->iface_targs = (void*)List_ptr_new();
+    /* pass */
     c->fields = (void*)List_ptr_new();
     /* pass */
     c->methods = (void*)List_ptr_new();

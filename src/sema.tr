@@ -5343,6 +5343,18 @@ extend Sema:
                     if _cf_found and _cf_ty.name == "def":
                         mut _cf_ret = AstType.init("void")
                         if _cf_ty.args.len > 0: _cf_ret = _cf_ty.args.get(_cf_ty.args.len - 1).read()
+                        # `_cf_ret` here is the FIELD's declared type as written on the
+                        # class (`pub maker: def(int) -> T` on `Holder[T]`) -- always the
+                        # bare, unsubstituted generic param name, since class field decls
+                        # are stored generically. Substitute through the RECEIVER's own
+                        # concrete type args (`Holder[Foo]` -> T=Foo), the same way the
+                        # adjacent EMethodCall case above already does for a method's own
+                        # return type -- without it, calling a `def(...)->T` FIELD (e.g.
+                        # `h.maker(42)`) infers the call's own result as literally `T`,
+                        # producing `T* f = ...;` in the generated C ("unknown type name
+                        # 'T'"), confirmed directly.
+                        if _cf_cls.generics.len > 0 and hobj_ty.args.len > 0:
+                            _cf_ret = self._subst_ret_generics(_cf_ret, _cf_cls.generics, hobj_ty.args)
                         mut _cf_prop = box_hirexpr(HirExpr.EPropAccess(hobj, method, _cf_ty))
                         return box_hirexpr(HirExpr.ECall(_cf_prop, hl, _cf_ret))
                 # error if mutating a container that has an active borrow

@@ -6,7 +6,7 @@
 *.c
 *.log
 *.i
-
+*.exe.*
 # Generated build directories (tauraroc output, cargo, etc.)
 build/
 target/
