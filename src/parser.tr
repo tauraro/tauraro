@@ -75,6 +75,19 @@ pub class Parser:
     pub src_text: str      # full source text, for source-snippet diagnostics ("" if unknown)
     pub error_count: int   # number of parse errors emitted (0 = clean parse)
     pub current_file: str  # source path, for diagnostic messages ("" if unknown)
+    # `from module import name as alias` — bug #10 (nebula bugs.txt): a plain
+    # Tauraro free function's alias silently did nothing (item.alias was only
+    # ever READ back by fmt.tr's source formatter, never applied). Tauraro's
+    # unity build already makes every imported module's `pub` names globally
+    # visible under their REAL name regardless of what an import list asks
+    # for (see the `from module import *` feature note), so an "alias" is
+    # resolved here as a pure call-site rewrite: when a plain identifier
+    # immediately followed by `(` matches an alias recorded here, substitute
+    # the real name before building the Ecall — see parse_postfix's `Token.
+    # LParen` case. Deliberately scoped to CALL-callee position only (not
+    # every identifier reference) so a local variable/parameter that happens
+    # to share a name with some OTHER file's alias is never rewritten.
+    pub import_aliases: Map[str, str]
 
 extend Parser:
     pub def init(tokens: Vec[Token], lines: Vec[int]) -> Parser:
@@ -86,6 +99,7 @@ extend Parser:
         p.pos = 0
         p.error_count = 0
         p.current_file = ""
+        p.import_aliases = Map[str, str].init(8)
         return p
 
     pub def peek(self) -> Token:
@@ -1584,6 +1598,16 @@ extend Parser:
                             e = box_expr(Expr.EPropAccess(e, attr))
                 case Token.LParen:
                     self.pos = self.pos + 1
+                    # bug #10 (nebula bugs.txt): resolve a `from module import
+                    # name as alias`'d free function here, at its call site --
+                    # see import_aliases' own field comment for why this is
+                    # scoped to exactly "plain identifier immediately called".
+                    match e.read():
+                        case Expr.EIdent(_pf_nm):
+                            if self.import_aliases.contains(_pf_nm):
+                                e = box_expr(Expr.EIdent(self.import_aliases.get(_pf_nm)))
+                        case _:
+                            pass
                     e = box_expr(Expr.ECall(e, self.parse_arg_list()))
                 case Token.LBracket:
                     mut ix_oln = self.cur_line()
@@ -2345,6 +2369,10 @@ extend Parser:
                         if self.peek() == Token.KwAs:
                             self.pos = self.pos + 1
                             item.alias = self.consume_ident()
+                            if item.alias != "":
+                                # See import_aliases' own comment (Parser field
+                                # block) -- applied at call sites in parse_postfix.
+                                self.import_aliases.insert(item.alias, item.name)
                         il.push(item)
                         if self.peek() == Token.Comma:
                             self.pos = self.pos + 1
@@ -2390,10 +2418,10 @@ extend Parser:
         if self.peek() == Token.Colon:
             self.pos = self.pos + 1
             mut gc = GenericConstraint.init(gname)
-            gc.bounds.push(box_asttype(AstType.init(self.consume_ident())))
+            gc.bounds.push(box_asttype(self.parse_type()))
             while self.peek() == Token.Plus:
                 self.pos = self.pos + 1
-                gc.bounds.push(box_asttype(AstType.init(self.consume_ident())))
+                gc.bounds.push(box_asttype(self.parse_type()))
             constraints.push(gc)
 
     pub def parse_function_def(self, is_method: bool) -> FunctionDef:
@@ -2534,12 +2562,16 @@ extend Parser:
         if self.peek() == Token.KwImplements:
             self.pos = self.pos + 1
             while True:
-                c.iface_names.push(self.consume_ident())
+                mut _im_name = self.consume_ident()
+                c.iface_names.push(_im_name)
+                mut _im_ty = AstType.init(_im_name)
                 if self.peek() == Token.LBracket:
                     self.pos = self.pos + 1
                     while self.peek() != Token.RBracket and self.peek() != Token.Eof:
-                        self.pos = self.pos + 1
+                        _im_ty.args.push(box_asttype(self.parse_type()))
+                        if self.peek() == Token.Comma: self.pos = self.pos + 1
                     if self.peek() == Token.RBracket: self.pos = self.pos + 1
+                c.iface_targs.push(box_asttype(_im_ty))
                 if self.peek() == Token.Comma:
                     self.pos = self.pos + 1
                 else: break

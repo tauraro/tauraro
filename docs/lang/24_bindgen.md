@@ -452,4 +452,10 @@ collection element types in `--export-cpp`. Function-like macros with no runtime
 
 ---
 
+See [10 — Wrapping C/C++ Libraries](../dev/10_wrapping_c_cpp_libraries.md) for
+the end-to-end package-author workflow built on this auto-linking mechanism:
+vendoring a library's source into your own taupkg package vs. binding one
+that's already installed on the OS via `pkg-config`, either way with zero
+manual linking for anyone who depends on the result.
+
 Next: [Casting with `as` →](23_casting_with_as.md)

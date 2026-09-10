@@ -845,6 +845,38 @@ pub def lower_to_lir_nh(prog: HirProgram, llvm: bool, no_heap: bool) -> LModule:
 pub def lower_to_lir(prog: HirProgram) -> LModule:
     return lower_to_lir_t(prog, false)
 
+# The FFI `c_*` integer/float scalar family (c_int, c_uint, c_char, c_float, ...;
+# see docs/lang/17_extern_and_ffi.md) isn't part of _ast_type_tag/_is_int_typename's
+# vocabulary (which only tracks Tauraro's OWN int/float/bool/str spellings) -- an
+# `extern "C"` declaration using them would otherwise silently fail _tag_of and get
+# dropped from registration entirely below, surfacing later as a confusing
+# "unsupported expression: call <name>()" at the CALL site instead of a clear error
+# at the declaration. Mirrors src/codegen/c.tr's _is_c_int_scalar/_is_float_type FFI
+# lists (kept local rather than imported: taumir is shared by both the native and
+# LLVM backends and shouldn't depend on the C backend's own module for this).
+def _is_extern_c_int(n: str) -> bool:
+    if n == "c_int" or n == "c_uint" or n == "c_char" or n == "c_uchar" or n == "c_schar": return true
+    if n == "c_short" or n == "c_ushort" or n == "c_long" or n == "c_ulong": return true
+    if n == "c_longlong" or n == "c_ulonglong" or n == "c_size_t" or n == "c_ssize_t": return true
+    if n == "c_int8_t" or n == "c_int16_t" or n == "c_int32_t" or n == "c_int64_t": return true
+    if n == "c_uint8_t" or n == "c_uint16_t" or n == "c_uint32_t" or n == "c_uint64_t": return true
+    if n == "c_intptr_t" or n == "c_uintptr_t" or n == "c_ptrdiff_t": return true
+    if n == "c_wchar" or n == "c_char16" or n == "c_char32": return true
+    return false
+
+def _is_extern_c_float(n: str) -> bool:
+    return n == "c_float" or n == "c_double" or n == "c_ldouble"
+
+# _tag_of, widened for an extern "C" signature only: falls back to the c_* FFI
+# family (int-like -> tag 0, float-like -> tag 5) when _tag_of itself doesn't
+# recognize the type name.
+def _extern_sig_tag(m: LModule, ty: AstType) -> int:
+    mut t = _tag_of(m, ty)
+    if t >= 0: return t
+    if _is_extern_c_int(ty.name): return 0
+    if _is_extern_c_float(ty.name): return 5
+    return -1
+
 def _lower_to_lir_body(m: LModule, prog: HirProgram) -> LModule:
     _detect_overloads(m, prog)
     # extern "C" declarations: register each as a linker-resolved call target. A str arg
@@ -856,11 +888,11 @@ def _lower_to_lir_body(m: LModule, prog: HirProgram) -> LModule:
         mut ef_ok = true
         mut epi = 0
         while epi < ef.params.len:
-            mut eptag = _tag_of(m, ef.params.get(epi).ty)
+            mut eptag = _extern_sig_tag(m, ef.params.get(epi).ty)
             if eptag != 0 and eptag != 1 and eptag != 4 and eptag != 5:   # int/str/bool/f64 args
                 ef_ok = false
             epi = epi + 1
-        mut ertag = _tag_of(m, ef.ret_ty)
+        mut ertag = _extern_sig_tag(m, ef.ret_ty)
         if ertag != 0 and ertag != 1 and ertag != 4 and ertag != 5: ef_ok = false
         if ef_ok:
             m.extfn_names.push(_own(ef.name))

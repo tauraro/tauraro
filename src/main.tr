@@ -259,12 +259,23 @@ pub def auto_link_cpp_shims(mod_file_paths: Vec[str], build_dir: str, cc: str,
                     print(c_yellow("warning") + ": shim '" + shim + "' referenced by " + trpath + " not found; link it manually with --link")
                     continue
             mut shim_txt = read_file(shim_src)
-            # A plain C source (`.c` WITHOUT `extern "C"`) is a hand-vendored C
-            # library dropped next to the bindings — compile it with the C driver
-            # so its functions keep their unmangled C-ABI names. A `.c` that DOES
-            # contain `extern "C"` is a generated shim meant for C++ (the `--macros`
-            # shim), and `.cpp`/`.cc`/`.cxx` are C++; both go through the C++ driver.
-            mut is_c_only = shim_src.ends_with(".c") and not shim_txt.contains("extern \"C\"")
+            # A plain C source (`.c` WITHOUT an UNCONDITIONAL `extern "C"`) is a
+            # hand-vendored C library dropped next to the bindings — compile it
+            # with the C driver so its functions keep their unmangled C-ABI names.
+            # A `.c` that DOES contain an unconditional `extern "C"` is a generated
+            # shim meant for C++ (the `--macros` shim always emits one, unguarded —
+            # see `_gen_macro_shims` in bindgen.tr), and `.cpp`/`.cc`/`.cxx` are C++;
+            # both of those go through the C++ driver.
+            #
+            # Real-world vendored C libraries (e.g. SQLite's amalgamation) commonly
+            # wrap their own `extern "C" { ... }` in `#ifdef __cplusplus` so the same
+            # file compiles standalone under a C++ consumer too — that guarded form
+            # is NOT a signal the shim itself requires a C++ compiler; compiling such
+            # a file with g++ instead of gcc trips real errors deep in unrelated code
+            # (C's implicit `void*` conversions are invalid in C++). Treat a file as
+            # C++-required only when `extern "C"` appears with no `__cplusplus` guard
+            # anywhere in the file.
+            mut is_c_only = shim_src.ends_with(".c") and (not shim_txt.contains("extern \"C\"") or shim_txt.contains("__cplusplus"))
             if not seen.contains(shim_src):
                 seen.insert(shim_src, true)
                 # compile once, cached by shim source content (build/<base>.o + .src sidecar)
@@ -514,6 +525,16 @@ pub def target_extra_flags(triple: str) -> str:
         return " -DTAURARO_WASM=1"
     # Windows cross (MinGW): statically link runtime so no DLL deps
     if _tr_str_contains(triple, "mingw"): return " -static"
+    # UEFI (PE/COFF, same x64 ABI as Windows): a function whose locals cross a
+    # 4KB frame gets a stack-probe call to __chkstk (the MS x64 ABI's guard-
+    # page-touching helper for large frames) -- normal on Windows, where the
+    # CRT supplies it, but UEFI is freestanding with no CRT, so the link fails
+    # with "undefined symbol: __chkstk" naming a symbol absent from the user's
+    # source (see bugs.txt #2). -mno-stack-arg-probe tells the C compiler not
+    # to emit those calls at all; UEFI firmware's own stack is sized generously
+    # enough upfront that the guard-page probing this disables was never doing
+    # useful work here anyway (there's no growable/guarded stack to protect).
+    if _tr_str_contains(triple, "unknown-uefi"): return " -mno-stack-arg-probe"
     return ""
 
 # Detect the best compiler for cross-compilation to a given triple.
@@ -1767,6 +1788,26 @@ pub def main(args: Vec[str]):
             lx_xlink = lx_xlink + " " + lx_xobj + " " + lx_rto + lx_xlibs + lx_xld + " -o \"" + lx_exe + "\" 2>>build/llvm_link.log"
             if _tr_system(lx_xlink) == 0:
                 lx_built = true
+            # A wasm target's `extern "C"` declarations are frequently HOST (JS) imports,
+            # never resolved at link time by design (see docs/lang/17_extern_and_ffi.md and
+            # toolkit.render.web's Canvas2D renderer) -- wasm-ld's default is to error on any
+            # undefined function symbol, which would make that pattern permanently unusable.
+            # `zig cc`'s OWN frontend rejects `-Wl,--allow-undefined`/`-Wl,--import-undefined`
+            # outright ("unsupported linker arg") even though `zig wasm-ld` (the linker zig cc
+            # calls internally) fully supports both -- confirmed by dry-running `zig cc -v` and
+            # replicating its own wasm-ld invocation by hand. So this can't be a flag added to
+            # the single zig-cc link line above; it has to bypass zig cc's frontend for the
+            # link step specifically. Only attempted as a FALLBACK, after the normal link
+            # above already failed with exactly this symptom -- every EXISTING wasm build
+            # (none of which use unresolved externs) succeeds on the first attempt, unchanged.
+            # `wasm32-unknown-unknown` needs no libc (target_extra_flags' -nostdlib), so the
+            # link inputs are just this object and the cross-compiled tauraro runtime -- no
+            # crt/libc objects to replicate (confirmed against zig cc -v's own freestanding
+            # link line; the wasi-libc case has several hashed cache paths that aren't safe to
+            # hand-reconstruct, so this fallback covers wasm32-unknown-unknown only for now).
+            if not lx_built and lx_via_zig and _tr_str_contains(lx_triple, "wasm32-unknown-unknown") and file_exists("build/llvm_link.log") and _tr_str_contains(read_file("build/llvm_link.log"), "undefined symbol"):
+                mut lx_wld = "zig wasm-ld --allow-undefined --export-memory --stack-first -z stack-size=1048576 --build-id=none -o \"" + lx_exe + "\" " + lx_xobj + " " + lx_rto + " 2>>build/llvm_link.log"
+                if _tr_system(lx_wld) == 0: lx_built = true
             if not lx_built:
                 print(c_red("error") + ": cross-link to " + lx_triple + " failed (see build/llvm_link.log)")
                 print("       install 'zig' (bundles libc+lld, no sysroot), or LLD + a " + lx_triple + " sysroot (--sysroot).")
@@ -2185,7 +2226,15 @@ pub def main(args: Vec[str]):
         # branch (windows.h/psapi/bcrypt) -- it already gates that on
         # !TAURARO_BARE, and --freestanding implies TAURARO_BARE, but a stale
         # runtime header without that gate would otherwise fail to compile.
-        uefi_cmd = uefi_cmd + " -cflags -U_WIN32 -U_WIN64 -U_MSC_VER -- "
+        # -mno-stack-arg-probe: without it, a function whose locals cross a 4KB
+        # frame gets a stack-probe call to __chkstk (the MS x64 ABI's guard-
+        # page helper for large frames, normal on hosted Windows where the CRT
+        # supplies it) -- but UEFI is freestanding with no CRT, so the link
+        # fails with "undefined symbol: __chkstk" naming a symbol absent from
+        # the user's own source (bugs.txt #2). UEFI firmware's own stack is
+        # sized generously upfront, so the guard-page probing this disables
+        # was never doing useful work here anyway.
+        uefi_cmd = uefi_cmd + " -cflags -U_WIN32 -U_WIN64 -U_MSC_VER -mno-stack-arg-probe -- "
         mut uci = 0
         while uci < all_c_files.len:
             uefi_cmd = uefi_cmd + "\"" + all_c_files.get(uci) + "\" "

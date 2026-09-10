@@ -402,6 +402,7 @@ pub class ClassDef:
     pub generics: Vec[str]
     pub base_classes: Vec[str]
     pub iface_names: Vec[str]
+    pub iface_targs: Vec[Pointer[AstType]]  # parallel to iface_names: iface_targs[i].args are the concrete generic args of `implements iface_names[i][...]` (e.g. `implements DbConnection[MyRS]` -> args=[MyRS]); empty .args when the interface isn't generic or no args were given
     pub fields: Vec[FieldDef]
     pub methods: Vec[FunctionDef]
     pub decorators: Vec[Decorator]
@@ -419,6 +420,7 @@ extend ClassDef:
         c.generics = Vec[str].init(0)
         c.base_classes = Vec[str].init(0)
         c.iface_names = Vec[str].init(0)
+        c.iface_targs = Vec[Pointer[AstType]].init(0)
         c.fields = Vec[FieldDef].init(4)
         c.methods = Vec[FunctionDef].init(8)
         c.decorators = Vec[Decorator].init(0)

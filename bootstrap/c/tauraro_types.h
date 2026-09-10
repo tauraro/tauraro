@@ -2087,7 +2087,6 @@ typedef struct FunctionDef {
 static void _trdrop_FunctionDef(void* vp) {
     FunctionDef* self = (FunctionDef*)vp; (void)self;
     _tr_str_release(self->name);
-    List_ptr_free_obj(self->constraints, _trdrop_GenericConstraint);
     List_TrStr_free(self->outlives_a);
     List_TrStr_free(self->outlives_b);
 }
@@ -2115,6 +2114,7 @@ typedef struct ClassDef {
     List_TrStr* generics;
     List_TrStr* base_classes;
     List_TrStr* iface_names;
+    List_ptr* iface_targs;
     List_ptr* fields;
     List_ptr* methods;
     List_ptr* decorators;
@@ -2128,7 +2128,6 @@ typedef struct ClassDef {
 static void _trdrop_ClassDef(void* vp) {
     ClassDef* self = (ClassDef*)vp; (void)self;
     _tr_str_release(self->name);
-    List_ptr_free_obj(self->constraints, _trdrop_GenericConstraint);
     _tr_str_release(self->docstring);
     List_TrStr_free(self->region_params);
 }
@@ -2223,11 +2222,13 @@ typedef struct Parser {
     TrStr src_text;
     long long error_count;
     TrStr current_file;
+    TrMap* import_aliases;
 } Parser;
 static void _trdrop_Parser(void* vp) {
     Parser* self = (Parser*)vp; (void)self;
     _tr_str_release(self->src_text);
     _tr_str_release(self->current_file);
+    Dict_free_strval(self->import_aliases);
 }
 #endif
 
@@ -2366,6 +2367,7 @@ typedef struct HirFunction {
     TrStr name;
     TrStr class_name;
     List_TrStr* generics;
+    List_ptr* constraints;
     List_ptr* params;
     AstType* ret_ty;
     AstType* throws_ty;
@@ -2413,6 +2415,7 @@ typedef struct HirClass {
     List_TrStr* generics;
     List_TrStr* base_classes;
     List_TrStr* iface_names;
+    List_ptr* iface_targs;
     List_ptr* fields;
     List_ptr* methods;
     List_ptr* decorators;
@@ -2687,6 +2690,7 @@ typedef struct Sema {
     List_ptr* nested_interfaces;
     long long current_line;
     List_TrStr* current_func_generics;
+    List_ptr* current_func_constraints;
     long long closure_boundary;
     List_ptr* closure_caps;
     TrMap* closure_cap_set;
@@ -2870,6 +2874,7 @@ typedef struct CGenerator {
     TrMap* coll_field_disq;
     TrMap* cur_proven_borrows;
     bool cur_ret_is_borrow;
+    AstType* cur_ret_ty;
     bool eliding_get_retain;
     bool no_elide;
     TrStr tier_define;
@@ -3760,6 +3765,7 @@ __attribute__((hot)) bool Sema_expr_is_borrow(Sema* self, HirExpr* e);
 __attribute__((hot)) bool Sema__expr_is_shared(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_check_spawn_sendable(Sema* self, HirExpr* e);
 __attribute__((hot)) void Sema_check_class_sendable_fields(Sema* self, ClassDef* c);
+__attribute__((hot)) HirExpr* Sema__patch_empty_dict_hint(Sema* self, HirExpr* hv, AstType* hint_ty);
 __attribute__((hot)) void Sema_mark_moved(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_mark_freed(Sema* self, TrStr name);
 __attribute__((hot)) void Sema_check_not_moved(Sema* self, TrStr name, TrStr ty_name);
@@ -3852,6 +3858,7 @@ __attribute__((hot)) bool Sema__owned_of(Sema* self, TrStr key);
 __attribute__((hot)) bool Sema__ret_yields_owned(Sema* self, HirExpr* e);
 __attribute__((hot)) bool Sema__is_type_param_in_scope(Sema* self, TrStr name);
 __attribute__((hot)) bool Sema__type_satisfies_bound(Sema* self, TrStr type_name, TrStr iface_name);
+__attribute__((hot)) AstType** Sema__resolve_generic_bound_method_ret(Sema* self, TrStr pname, TrStr method);
 __attribute__((hot)) void Sema_check_call_bounds(Sema* self, TrStr fname, List_ptr* hargs);
 __attribute__((hot)) AstType* Sema__subst_ret_generics(Sema* self, AstType* ty, List_TrStr* generics, List_ptr* concrete);
 __attribute__((hot)) void Sema_check_class_bounds(Sema* self, TrStr cls_name, List_ptr* arg_tys);
@@ -4166,6 +4173,9 @@ __attribute__((hot)) long long _arg_limit(LModule* m);
 __attribute__((hot)) LModule* lower_to_lir_t(HirProgram* prog, bool llvm);
 __attribute__((hot)) LModule* lower_to_lir_nh(HirProgram* prog, bool llvm, bool no_heap);
 __attribute__((hot)) LModule* lower_to_lir(HirProgram* prog);
+__attribute__((hot)) bool _is_extern_c_int(TrStr n);
+__attribute__((hot)) bool _is_extern_c_float(TrStr n);
+__attribute__((hot)) long long _extern_sig_tag(LModule* m, AstType* ty);
 __attribute__((hot)) LModule* _lower_to_lir_body(LModule* m, HirProgram* prog);
 __attribute__((hot)) bool _fn_has_iface_param(LModule* m, HirFunction* f);
 __attribute__((hot)) bool _fn_is_specializable(LModule* m, HirFunction* f);
@@ -4549,7 +4559,9 @@ __attribute__((hot)) TrStr CGenerator_mono_cprefix(CGenerator* self, AstType* t)
 __attribute__((hot)) void CGenerator_capture_local_mono(CGenerator* self, TrStr name, AstType* ty, HirExpr* v);
 __attribute__((hot)) void CGenerator_ensure_mono(CGenerator* self, HirClass* cls, List_ptr* type_args);
 __attribute__((hot)) TrStr CGenerator_infer_generic_targ(CGenerator* self, TrStr fname, List_ptr* args);
+__attribute__((hot)) List_TrStr* CGenerator_infer_generic_targs_multi(CGenerator* self, TrStr fname, List_ptr* args);
 __attribute__((hot)) void CGenerator_ensure_mono_func(CGenerator* self, TrStr fname, TrStr targ);
+__attribute__((hot)) void CGenerator_ensure_mono_func_n(CGenerator* self, TrStr fname, List_TrStr* targs);
 __attribute__((hot)) TrStr CGenerator_infer_method_targ(CGenerator* self, TrStr cls_name, TrStr method, List_ptr* args);
 __attribute__((hot)) void CGenerator_ensure_mono_method(CGenerator* self, TrStr cls_name, TrStr method, TrStr targ);
 __attribute__((hot)) TrStr CGenerator_get_user_decorator_attr(CGenerator* self, TrStr name);
@@ -4575,7 +4587,7 @@ __attribute__((hot)) void CGenerator_emit_drop_fwd_decls(CGenerator* self, HirPr
 __attribute__((hot)) void CGenerator_gen_class_struct(CGenerator* self, HirClass* c);
 __attribute__((hot)) void CGenerator_gen_enum_struct(CGenerator* self, HirEnum* e);
 __attribute__((hot)) void CGenerator_gen_interface_vtable(CGenerator* self, HirInterface* iface);
-__attribute__((hot)) TrStr CGenerator_gen_one_iface_wrap(CGenerator* self, TrStr cls_name, HirInterface* iface);
+__attribute__((hot)) TrStr CGenerator_gen_one_iface_wrap(CGenerator* self, TrStr cls_name, HirInterface* iface, List_ptr* targs);
 __attribute__((hot)) TrStr CGenerator_gen_expr(CGenerator* self, HirExpr* e_ptr);
 __attribute__((hot)) TrStr CGenerator_opt_payload_binding(CGenerator* self, AstType* subj_hty, TrStr tn, TrStr vn, TrStr bind_c, TrStr slot);
 __attribute__((hot)) TrStr CGenerator_gen_match_expr(CGenerator* self, HirExpr* subj, List_ptr* arms, AstType* ty);
@@ -4602,6 +4614,8 @@ __attribute__((hot)) void CGenerator__scan_coll_fields_block(CGenerator* self, H
 __attribute__((hot)) void CGenerator__scan_coll_fields_stmt(CGenerator* self, HirStmt* sp);
 __attribute__((hot)) TrStr CGenerator__coll_field_free_call(CGenerator* self, TrStr fld_c, AstType* ty);
 __attribute__((hot)) bool CGenerator_is_heap_class_tn(CGenerator* self, TrStr tn);
+__attribute__((hot)) TrStr CGenerator_iface_wrap_return(CGenerator* self, HirExpr* e, TrStr s);
+__attribute__((hot)) TrStr CGenerator_iface_wrap_to(CGenerator* self, AstType* target_ty, HirExpr* e, TrStr s);
 __attribute__((hot)) TrStr CGenerator_obj_retain_wrap(CGenerator* self, HirExpr* e, TrStr s, bool is_return);
 __attribute__((hot)) bool CGenerator__fn_owned_lookup(CGenerator* self, TrStr key);
 __attribute__((hot)) void CGenerator__reg_fn_owned(CGenerator* self, TrStr key, bool v);

@@ -96,6 +96,102 @@ added here as each phase lands.
   extracted `.data` via a bare `_tr_strz()` and discarded the struct. Fresh
   string arguments are now hoisted to a temp and released by the enclosing
   statement's `flush_wraps`, matching `gen_args` for normal calls.
+- **Parser hang/crash on a generic bound carrying its own type argument**
+  (`[C: DbConnection[RS], RS: DbResultSet]`). `parse_generic_bound`
+  (`src/parser.tr`) consumed a bound's name with a bare `consume_ident()`,
+  which doesn't understand `Iface[Arg]` syntax; the parser stalled on the `[`
+  and looped forever without advancing. Fixed by reusing the existing
+  `parse_type()` parser (already used for the same `Name[Args]` shape
+  elsewhere), which also covers the identical class-generic-bound case.
+- **No dynamic-dispatch boxing for a bare interface return type.** A function
+  declared `-> SomeInterface` (the interface used directly as a concrete
+  return type, not a generic bound) type-checked but failed C codegen —
+  `incompatible types when returning type 'X *' but 'Y_obj' was expected` —
+  because `return` never boxed the concrete class pointer into the
+  interface's `{vtable, data}` dispatch object the way `let`/call-argument
+  sites already did. Added `cur_ret_ty` tracking and an `iface_wrap_to`
+  helper (`src/codegen/c.tr`) invoked at every `return` site; verified the
+  generated C now performs real vtable dispatch (`rs.vtable->next(rs.data)`).
+- **Interface-typed field/local assignment had the same missing box.**
+  `obj.field = ConcreteClass()` for a field declared with an interface type
+  hit the identical `incompatible types when assigning to type 'Iface_obj'
+  from type 'Class *'` error, since plain assignment-statement codegen never
+  called the boxing helper above. `iface_wrap_return` was generalized into
+  `iface_wrap_to(target_ty, expr, rhs)` and wired into the general
+  assignment path (`src/codegen/c.tr`), so any `lhs = rhs` where `lhs`'s
+  declared type is an interface and `rhs` is a concrete class now boxes
+  correctly, consistent with every other interface-assignment context.
+- **Method calls on a concrete type returned from a generic-bound receiver
+  mis-codegen'd as bare, unqualified C calls.** Inside a generic function
+  body `[C: DbConnection]`, calling a method on the result of
+  `conn.execute()` (`conn: C`) resolved to `void` during sema — return-type
+  inference only handled a receiver whose *own* declared type was literally
+  the interface name, not a generic type parameter bound to it — so codegen
+  fell back to `next(rs)` instead of `QueryResultSet_next(rs)`, colliding
+  with unrelated C symbols. Added `current_func_constraints` tracking and
+  `_resolve_generic_bound_method_ret` (`src/sema.tr`) to resolve the call
+  through the bound interface before falling through to the generic
+  return-type-inference chain.
+- **Explicit multi-type-argument generic function calls
+  (`fname[T1, T2](args)`) were mis-parsed as an index/tuple expression**
+  instead of a generic call, emitting a bogus `def_get_index(...)` — the
+  existing explicit-call handling in `Expr.ECall` lowering only matched a
+  single `Expr.EIdent` type argument, silently doing nothing for
+  `Expr.ETuple` (2+ args). Sema now mangles the callee to
+  `fname__MONO_T1_T2` for the multi-arg case too, and `ensure_mono_func`
+  (`src/codegen/c.tr`) was generalized into `ensure_mono_func_n` to
+  monomorphize a free function over any number of type parameters (the
+  mono-scan's `__MONO_` name-splitting was updated to match).
+- **A non-generic class implementing a generic interface with concrete
+  arguments silently lost those arguments**, so its `_as_Iface` vtable wrap
+  could never be correctly generated. `class MyConn implements
+  DbConnection[MyRS]:` — the parser recognized `DbConnection` but discarded
+  the `[MyRS]` entirely (never stored anywhere). Added `iface_targs`
+  (parallel to `iface_names`) through `ClassDef` → `HirClass`
+  (`src/ast.tr`, `src/hir.tr`, `src/parser.tr`, `src/sema.tr`);
+  `gen_one_iface_wrap` (`src/codegen/c.tr`) now monomorphizes the interface's
+  vtable/obj typedefs per concrete instantiation (`DbConnection_MyRS`)
+  instead of assuming a non-generic interface.
+- **Implicit (non-bracketed) calls to a generic free function with 2+ type
+  parameters were never monomorphized**, emitting an `implicit declaration
+  of function` C error — the call-site inference path only handled exactly
+  one generic parameter. Added `infer_generic_targs_multi`
+  (`src/codegen/c.tr`): generics that appear directly as a parameter's own
+  type are inferred as before; any remaining generic (e.g. `RS` in
+  `[C: DbConnection[RS], RS: DbResultSet]`, which never appears as a
+  parameter's own type) is cross-referenced through the now-resolved
+  concrete argument class's own `implements Iface[Concrete]` declaration
+  (via the `iface_targs` above), iterated to a fixed point for chained
+  bounds.
+- **Module-level `pub mut`/`mut` globals had to be declared textually
+  before any function in the same file that referenced them**, or name
+  resolution failed with `[N-3] name 'X' is not defined` — misreported
+  against whichever call site happened to trigger it first, not the
+  declaration. `Sema.analyze()` processes declarations in one sequential
+  pass that both registers a global's symbol and lowers function bodies in
+  file order, so a function positioned earlier saw an as-yet-unregistered
+  symbol. Added a pre-registration pass (`src/sema.tr`, mirroring the
+  existing class/actor pre-registration) that declares every top-level
+  `SLet` global's name and type — from its explicit annotation, or a
+  side-effect-free literal-only inference when unannotated — before any
+  function body is lowered.
+- **`Dict[K,V].init()` / `.new()` (and the `Map[K,V]` alias) called with no
+  arguments failed to compile**, forwarding zero arguments straight into
+  `_tr_dict_new`/`_tr_idict_new`, which both require a capacity-hint
+  parameter (`too few arguments to function`). Defaulted to `16`
+  (`src/codegen/c.tr`), matching the identical no-arg default `Set[T].init()`
+  already had two branches above it in the same function.
+
+### Fixed (build/CI)
+- **The portable-C bootstrap seed (`bootstrap/c/`) was missing the
+  in-process-LLVM shim**, so every CI platform's stage0 build failed to
+  link with `undefined reference to '_tr_llvm_emit_object'`.
+  `runtime/tauraro_llvm.c` provides that symbol and must be copied into
+  `bootstrap/c/` as `module_tauraro_llvm.c` (picked up by the stage0
+  build's `module_*.c` glob) — `scripts/regen-bootstrap.sh` already did
+  this, but `scripts/regen-bootstrap.ps1` never did, so a bootstrap
+  regenerated on Windows silently omitted it. Added the missing file and
+  brought the PowerShell script to parity with the shell one.
 
 ### Changed
 - **Async/await is now a green-thread runtime.** `async def` / `await` no

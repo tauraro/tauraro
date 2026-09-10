@@ -187,6 +187,7 @@ pub class CGenerator:
     pub coll_field_disq: Map[str, bool]   # bare collection field NAME ever assigned a non-fresh (aliased) collection anywhere — disqualifies freeing that field (collections aren't refcounted, so an alias would double-free)
     pub cur_proven_borrows: Map[str, bool]  # outlives engine: ref-borrow locals whose source provably outlives them — refcount ELIDED (no retain at bind, no release at scope)
     pub cur_ret_is_borrow: bool  # current function's return type is `ref` — returns a BORROW (no retain on return; the caller does not free it)
+    pub cur_ret_ty: AstType      # current function's declared return type — used by SReturn to box a concrete class into an interface's dyn-dispatch wrapper (`Class_as_Iface`) when the signature says `-> SomeInterface`
     pub eliding_get_retain: bool # set while generating a PROVEN collection-element borrow's RHS (`ref T = coll.get(k)`) — the str-valued get returns the unboxed alias WITHOUT retaining (zero-copy borrow); the SLet also skips the release
     pub no_elide: bool           # --no-elide: force pure ARC (drop ALL proven-borrow elision) — the differential-soundness oracle baseline
     pub tier_define: str         # --freestanding => "TAURARO_KERNEL" (no libc), --no-std => "TAURARO_NO_OS" (no OS); emitted as a #define before the runtime include so the tier build "just works" without a hand-passed -D
@@ -267,6 +268,7 @@ pub class CGenerator:
         g.coll_field_disq = Map[str, bool].init(32)
         g.cur_proven_borrows = Map[str, bool].init(8)
         g.cur_ret_is_borrow = false
+        g.cur_ret_ty = AstType.init("void")
         g.eliding_get_retain = false
         g.no_elide = false
         g.tier_define = ""
@@ -335,18 +337,29 @@ pub class CGenerator:
     pub def gen_func_body(self, body: HirBlock, indent: int):
         self.reset_defer_stack()
         self.gen_block(body, indent)
+        mut ends_in_return = false
+        if body.stmts.len > 0:
+            match body.stmts.get(body.stmts.len - 1).read():
+                case HirStmt.SReturn(_): ends_in_return = true
+                case _: pass
         if self.defer_stack.len > 0:
-            mut ends_in_return = false
-            if body.stmts.len > 0:
-                match body.stmts.get(body.stmts.len - 1).read():
-                    case HirStmt.SReturn(_): ends_in_return = true
-                    case _: pass
             if not ends_in_return:
                 mut fdi = self.defer_stack.len - 1
                 while fdi >= 0:
                     self.w(self.defer_stack.get(fdi))
                     if fdi == 0: break
                     fdi = fdi - 1
+        # A `throws` function's C return type is `Result`, unlike a plain void
+        # function's `void` -- falling off the end of a non-void C function
+        # with no return statement is undefined behavior (observed as garbage
+        # SqliteError codes: a one-line body like `self.exec("BEGIN")?` has no
+        # trailing `return`, which is harmless for an ordinary void function
+        # but reads whatever garbage is in the return register for `Result`).
+        # This heuristic (last top-level statement literally SReturn) can miss
+        # an if/else where EVERY branch returns, in which case this adds a
+        # harmless unreachable statement -- never wrong, occasionally redundant.
+        if self.cur_throws_ty != "" and not ends_in_return:
+            self.w("    return ((Result){.tag=Result_Ok});\n")
 
     # Append the outlined closure functions (accumulated during body codegen) to
     # the current translation unit, at file scope after everything else. Each
@@ -371,6 +384,7 @@ pub class CGenerator:
         # A `-> ref` function returns a BORROW: it does NOT retain on return, and its
         # callers must NOT free the result (see _is_fresh_str_expr / _expr_is_borrow_call).
         self.cur_ret_is_borrow = f.ret_ty.is_borrow
+        self.cur_ret_ty = f.ret_ty
         mut pi = 0
         while pi < f.params.len:
             self.decl_vars.insert(f.params.get(pi).name, true)
@@ -861,6 +875,22 @@ pub class CGenerator:
             elif cv == "short": tn = "i16"
             elif cv == "signed char": tn = "i8"
             elif cv == "float": tn = "f32"
+            else:
+                # A generic param bound to a user-class/struct pointer (e.g. the C of
+                # Engine[C, R] substituted to "MyConn*") mono-suffixes to the POINTEE
+                # struct name ("MyConn") -- matching type_args_suffix's identical
+                # special-case (see its own comment) -- not "MyConn_ptr", which
+                # type_suffix's generic "ends in '*'" rule would otherwise produce.
+                # Without this, a class constructor call's own type-arg-driven suffix
+                # (type_args_suffix, used when explicit args are present on the call)
+                # and this active-type_subst-driven suffix (used when they're absent,
+                # e.g. the declared type of `mut e = Engine[C, R]()`'s LHS inside a
+                # monomorphized method body) disagree on the same instantiation's
+                # name -- confirmed as a real bug producing two different C struct
+                # names (Engine_MyConn_MyRS vs Engine_MyConn_ptr_MyRS_ptr) for the
+                # same type, an immediate incompatible-pointer-types compile error.
+                if tn.ends_with("*"):
+                    tn = tn.slice(0, tn.len() - 1)
             sfx = sfx + self.type_suffix(tn)
             gi = gi + 1
         return sfx
@@ -922,7 +952,21 @@ pub class CGenerator:
             match v.read():
                 case HirExpr.EMethodCall(recv, _, _, _):
                     mut rt = hir_expr_type(recv)
-                    if self.classes.contains(rt.name) and rt.args.len > 0:
+                    # Only a genuine "factory" shape: the call's OWN result type is
+                    # the SAME generic class as the receiver (`Holder[int].make(5)`
+                    # returning `Holder[int]` again), just missing its own type args
+                    # in the HIR (the gap this fallback exists for). Without the
+                    # `vt.name == rt.name` check, this also fired for an ORDINARY
+                    # method returning some OTHER, unrelated type (`h.build(42)`
+                    # returning plain `Foo`, `h: Holder[Foo]`) -- `vt` (checked
+                    # above) correctly has 0 type args for "Foo" (a non-generic
+                    # class), so control fell through to here and wrongly recorded
+                    # the RECEIVER's mono prefix ("Holder_Foo") against the LOCAL
+                    # holding the unrelated result, making scope-exit auto-drop emit
+                    # `_tr_obj_release(f, _trdrop_Holder_Foo)` -- undefined, since
+                    # "f" is a plain "Foo" needing "_trdrop_Foo", not "Holder_Foo".
+                    # Confirmed directly with a minimal, DB-unrelated repro.
+                    if vt.name == rt.name and self.classes.contains(rt.name) and rt.args.len > 0:
                         self.class_local_mono.insert(name, self.mono_cprefix(rt))
                 case _: pass
 
@@ -1010,8 +1054,19 @@ pub class CGenerator:
             mut m = cls.methods.get(mi)
             mut old_class = self.cur_class
             mut old_func  = self.cur_func
+            # A monomorphized method's own `throws` annotation must be visible to
+            # gen_func_body's SReturn handling the same way every OTHER
+            # method-body-generation site (generate_module_c, generate(), ...)
+            # already sets it -- this loop was the one place that didn't.
+            # Without it, a generic method declared `throws E -> T` (e.g.
+            # Engine[C,R].execute()) falls through to the non-throws return
+            # path: a bare `return value;` where a `Result`-wrapped value is
+            # expected everywhere the function is called, an immediate
+            # incompatible-types compile error at every call site.
+            mut old_throws = self.cur_throws_ty
             self.cur_class = mono_name
             self.cur_func  = m.name
+            self.cur_throws_ty = m.throws_ty.name
             self.decl_vars = Map[str, bool].init(64)
             self.str_local_names = Map[str, bool].init(16)
             self.coll_local_sfx = Map[str, str].init(16)
@@ -1027,6 +1082,7 @@ pub class CGenerator:
             self.w("}\n\n")
             self.cur_class = old_class
             self.cur_func  = old_func
+            self.cur_throws_ty = old_throws
             mi = mi + 1
         self.fn_mono_body = self.buf
         self.buf        = _cmb_obuf
@@ -1125,6 +1181,75 @@ pub class CGenerator:
         if targ == "void" or targ == gp or targ == "": return ""
         return targ
 
+    # Multi-generic sibling of infer_generic_targ: resolves ALL of a 2+-generic free
+    # function's type params from a call site with no explicit `f[T1, T2](..)` args.
+    # Pass 1 mirrors infer_generic_targ (a param declared directly as the generic
+    # param name gives its concrete type from the argument). Pass 2 handles generics
+    # that never appear as any param's own type but only inside another (now-resolved)
+    # param's BOUND, e.g. `RS` in `[C: DbConnection[RS], RS: DbResultSet]`: once `C`
+    # resolves to a concrete class, that class's OWN `implements DbConnection[MyRS]`
+    # declaration (see ClassDef.iface_targs) records RS's concrete binding. Iterates
+    # to a fixed point so chained cross-references resolve; returns an EMPTY Vec
+    # (distinct from a same-length-but-blank result) when any generic stays unresolved,
+    # so the caller can fall back to the (broken -> now just "not specialized") default.
+    pub def infer_generic_targs_multi(self, fname: str, args: Vec[Pointer[HirExpr]]) -> Vec[str]:
+        mut empty = Vec[str].init(0)
+        if not self.functions.contains(fname): return empty
+        mut fd = self.functions.get(fname)
+        if fd.class_name != "" or fd.generics.len < 2: return empty
+        if fd.params as usize == 0 as usize: return empty
+        mut sk = 0
+        if fd.params.len > 0 and fd.params.get(0).name == "self": sk = 1
+        mut resolved = Map[str, str].init(8)
+        mut pi = 0
+        while pi < fd.params.len:
+            mut pp = fd.params.get(pi)
+            if pp.name != "self":
+                mut aidx = pi - sk
+                if aidx >= 0 and aidx < args.len and fd.generics.contains(pp.ty.name) and not resolved.contains(pp.ty.name):
+                    mut _rtn = self.resolve_generic_tyname(hir_expr_type(args.get(aidx)).name)
+                    if _rtn != "" and _rtn != "void": resolved.insert(pp.ty.name, _rtn)
+            pi = pi + 1
+        mut progress = true
+        while progress:
+            progress = false
+            mut ci = 0
+            while ci < fd.constraints.len:
+                mut gc = fd.constraints.get(ci)
+                if resolved.contains(gc.target):
+                    mut concrete_x = resolved.get(gc.target)
+                    if self.classes.contains(concrete_x):
+                        mut concrete_cls = self.classes.get(concrete_x)
+                        mut bi = 0
+                        while bi < gc.bounds.len:
+                            mut bound_ty = gc.bounds.get(bi).read()
+                            if self.interfaces.contains(bound_ty.name) and bound_ty.args.len > 0:
+                                mut api = 0
+                                while api < bound_ty.args.len:
+                                    mut arg_nm = bound_ty.args.get(api).read().name
+                                    if fd.generics.contains(arg_nm) and not resolved.contains(arg_nm):
+                                        if concrete_cls.iface_names as usize != 0 as usize:
+                                            mut ifi = 0
+                                            while ifi < concrete_cls.iface_names.len:
+                                                if concrete_cls.iface_names.get(ifi) == bound_ty.name:
+                                                    if concrete_cls.iface_targs as usize != 0 as usize and ifi < concrete_cls.iface_targs.len:
+                                                        mut cls_iface_ty = concrete_cls.iface_targs.get(ifi).read()
+                                                        if api < cls_iface_ty.args.len:
+                                                            resolved.insert(arg_nm, cls_iface_ty.args.get(api).read().name)
+                                                            progress = true
+                                                ifi = ifi + 1
+                                    api = api + 1
+                            bi = bi + 1
+                ci = ci + 1
+        mut result = Vec[str].init(fd.generics.len)
+        mut gi2 = 0
+        while gi2 < fd.generics.len:
+            mut gn2 = fd.generics.get(gi2)
+            if not resolved.contains(gn2): return empty
+            result.push(resolved.get(gn2))
+            gi2 = gi2 + 1
+        return result
+
     # Ensure a monomorphized copy of a generic free function is generated. The
     # PROTOTYPE goes into mono_buf (flushed early, only forward-declared types
     # needed); the BODY goes into fn_mono_body (flushed after all prototypes, so
@@ -1132,22 +1257,48 @@ pub class CGenerator:
     # the shared header without a multi-TU duplicate-symbol clash — exactly like the
     # generic-class method monos.
     pub def ensure_mono_func(self, fname: str, targ: str):
-        mut mono_key = "func_" + fname + "__MONO_" + targ
+        mut targs = Vec[str].init(1)
+        targs.push(targ)
+        self.ensure_mono_func_n(fname, targs)
+
+    # Same as ensure_mono_func, generalized to a function with N (not just 1)
+    # generic type params — driven by an explicit multi-arg call `f[T1, T2](..)`
+    # (sema mangles the callee to `f__MONO_T1_T2`; see scan_mono_expr, which
+    # splits the joined suffix back into targs using f.generics.len).
+    pub def ensure_mono_func_n(self, fname: str, targs: Vec[str]):
+        mut joined = ""
+        mut jji = 0
+        while jji < targs.len:
+            if jji > 0: joined = joined + "_"
+            joined = joined + targs.get(jji)
+            jji = jji + 1
+        mut mono_key = "func_" + fname + "__MONO_" + joined
         if self.mono_done.contains(mono_key): return
         self.mono_done.insert(mono_key, true)
         if not self.functions.contains(fname): return
         mut f = self.functions.get(fname)
         if f.generics.len == 0: return
-        mut type_param = f.generics.get(0)
-        mut concrete_c = self.type_to_c(AstType.init(targ))
+        if f.generics.len != targs.len: return
         mut old_subst = self.type_subst
         self.type_subst = Map[str, str].init(4)
-        self.type_subst.insert(type_param, concrete_c)
+        mut tsi = 0
+        while tsi < f.generics.len:
+            self.type_subst.insert(f.generics.get(tsi), self.type_to_c(AstType.init(targs.get(tsi))))
+            tsi = tsi + 1
         mut old_buf = self.buf
         mut old_sbuf = self.struct_buf
         mut old_pbuf = self.proto_buf
-        mut mono_fname = fname + "__MONO_" + targ
+        mut mono_fname = fname + "__MONO_" + joined
+        # A `throws`-declared function's C return type is ALWAYS `Result`,
+        # regardless of its own declared success type -- matching
+        # gen_func_sig's identical check for the non-monomorphized case.
+        # Missing here meant a monomorphized generic free function's
+        # signature used its bare success type (e.g. plain `int` for a
+        # `-> bool`) instead, an immediate "invalid initializer" at any
+        # call site assigning the call to a `Result`-typed variable, since
+        # every caller of a throws-declared function expects `Result` back.
         mut ret_s = self.type_to_c(f.ret_ty)
+        if f.throws_ty.name != "": ret_s = "Result"
         mut sig = "static __attribute__((hot)) " + ret_s + " " + mono_fname + "("
         mut first = true
         mut pi = 0
@@ -1174,8 +1325,17 @@ pub class CGenerator:
         self.proto_buf  = mono_body_sb
         mut old_class = self.cur_class
         mut old_func = self.cur_func
+        # Same fix as ensure_mono's (class-method) monomorphization loop:
+        # this is a SEPARATE code path (free FUNCTIONS with N type params,
+        # vs. a class's own generic methods) that had the identical gap --
+        # a monomorphized function's own `throws` annotation must be
+        # visible to gen_func_body's SReturn handling, or a `return`
+        # statement emits a bare, unwrapped value instead of a
+        # `Result`-wrapped one.
+        mut old_throws = self.cur_throws_ty
         self.cur_class = ""
         self.cur_func = mono_fname
+        self.cur_throws_ty = f.throws_ty.name
         self.decl_vars = Map[str, bool].init(64)
         self.str_local_names = Map[str, bool].init(16)
         self.coll_local_sfx = Map[str, str].init(16)
@@ -1192,6 +1352,7 @@ pub class CGenerator:
         self.w("}\n\n")
         self.cur_class = old_class
         self.cur_func = old_func
+        self.cur_throws_ty = old_throws
         self.fn_mono_body.append(mono_body_sb.to_string().as_str())
         self.buf = old_buf
         self.struct_buf = old_sbuf
@@ -1385,11 +1546,39 @@ pub class CGenerator:
         mut nm = f.name
         while i < f.decorators.len:
             mut d = f.decorators.get(i).name
-            if d == "allocator": return "#define TAURARO_ALLOC(sz) " + nm + "(sz)\n"
-            if d == "free":      return "#define TAURARO_FREE(p) " + nm + "(p)\n"
-            if d == "realloc":   return "#define TAURARO_REALLOC(p,sz) " + nm + "(p,sz)\n"
-            if d == "calloc":    return "#define TAURARO_CALLOC(n,sz) " + nm + "(n,sz)\n"
-            if d == "output":    return "#define _TR_WRITE(s) " + nm + "(s)\n"
+            # Route through a uniquely-named static-inline wrapper rather than
+            # substituting the user's chosen function name straight into the
+            # macro body. A bare `#define TAURARO_CALLOC(n,sz) c(n,sz)` expands
+            # textually wherever it's used, including e.g.
+            # `_TrChan* c = (_TrChan*)TAURARO_CALLOC(1, sizeof(_TrChan));` in the
+            # runtime -- and C scopes a declared name from its own declarator,
+            # so that `c(...)` in the initializer resolves to the JUST-DECLARED
+            # `_TrChan* c` being called as a function, not the user's hook,
+            # whenever the hook's name collides with any local the runtime
+            # macro happens to expand next to (a one-letter name like `c` is
+            # exactly the case that bites). The wrapper's own tiny, fixed
+            # parameter list has no such local to collide with.
+            #
+            # emit_tier_hooks (this text's caller) is written into BOTH the
+            # shared tauraro_types.h (so every module .c file's runtime
+            # #include sees TAURARO_ALLOC/etc, not just main.c's) AND
+            # directly into main.c's/each module's own body -- harmless
+            # duplication for a plain #define, but a real "redefinition of
+            # <fn>" error for an actual function definition, since both
+            # copies land in the same translation unit once types.h is
+            # #include'd. An #ifndef guard makes the wrapper safe to emit
+            # more than once, the same way a header guard protects a
+            # multiply-#include'd declaration.
+            if d == "allocator":
+                return "#ifndef _TR_HOOK_ALLOC_DEFINED\n#define _TR_HOOK_ALLOC_DEFINED\nstatic inline void* _tr_hook_alloc(unsigned long long sz) { return (void*)" + nm + "(sz); }\n#endif\n#define TAURARO_ALLOC(sz) _tr_hook_alloc(sz)\n"
+            if d == "free":
+                return "#ifndef _TR_HOOK_FREE_DEFINED\n#define _TR_HOOK_FREE_DEFINED\nstatic inline void _tr_hook_free(void* p) { " + nm + "((unsigned char*)p); }\n#endif\n#define TAURARO_FREE(p) _tr_hook_free(p)\n"
+            if d == "realloc":
+                return "#ifndef _TR_HOOK_REALLOC_DEFINED\n#define _TR_HOOK_REALLOC_DEFINED\nstatic inline void* _tr_hook_realloc(void* p, unsigned long long sz) { return (void*)" + nm + "((unsigned char*)p, sz); }\n#endif\n#define TAURARO_REALLOC(p,sz) _tr_hook_realloc(p,sz)\n"
+            if d == "calloc":
+                return "#ifndef _TR_HOOK_CALLOC_DEFINED\n#define _TR_HOOK_CALLOC_DEFINED\nstatic inline void* _tr_hook_calloc(unsigned long long n, unsigned long long sz) { return (void*)" + nm + "(n, sz); }\n#endif\n#define TAURARO_CALLOC(n,sz) _tr_hook_calloc(n,sz)\n"
+            if d == "output":
+                return "#ifndef _TR_HOOK_OUTPUT_DEFINED\n#define _TR_HOOK_OUTPUT_DEFINED\nstatic inline void _tr_hook_output(const char* s) { " + nm + "((char*)s); }\n#endif\n#define _TR_WRITE(s) _tr_hook_output(s)\n"
             i = i + 1
         return ""
 
@@ -1886,10 +2075,46 @@ pub class CGenerator:
             self.ws("typedef struct { " + iface.name + "_vtable* vtable; void* data; } " + iface.name + "_obj;\n\n")
 
     # Build the static-inline _as_ wrap function string for one class+interface pair.
-    # Called from generate_types_header (appended after all prototypes).
-    pub def gen_one_iface_wrap(self, cls_name: str, iface: HirInterface) -> str:
-        mut s = "static inline " + iface.name + "_obj " + cls_name + "_as_" + iface.name + "(" + cls_name + "* self) {\n"
-        s = s + "    static const " + iface.name + "_vtable _vtbl_" + cls_name + "_" + iface.name + " = {\n"
+    # Called from generate_types_header (appended after all prototypes). `targs` are
+    # the CONCRETE generic args a non-generic class supplied for a generic interface
+    # (`class MyConn implements DbConnection[MyRS]:` -> targs=[MyRS]); empty when the
+    # interface isn't generic. When non-empty, the interface's vtable/obj typedefs
+    # (skipped by gen_interface_vtable for generic interfaces) are monomorphized here,
+    # named `<Iface>_<argsuffix>` (e.g. `DbConnection_MyRS`) exactly like a generic
+    # class's own monomorphization naming (type_args_suffix), and every method
+    # signature substitutes the interface's own generic param names for `targs`
+    # (`execute(self) -> RS` -> `MyRS*`).
+    pub def gen_one_iface_wrap(self, cls_name: str, iface: HirInterface, targs: Vec[Pointer[AstType]]) -> str:
+        mut mono_iface_name = iface.name
+        mut old_subst = self.type_subst
+        if iface.generics.len > 0 and targs.len > 0:
+            self.type_subst = Map[str, str].init(4)
+            mut gsi = 0
+            while gsi < iface.generics.len and gsi < targs.len:
+                self.type_subst.insert(iface.generics.get(gsi), self.type_to_c(targs.get(gsi).read()))
+                gsi = gsi + 1
+            mono_iface_name = iface.name + "_" + self.type_args_suffix(targs)
+        mut s = ""
+        if not self.emitted_fns.contains("iface_obj_" + mono_iface_name):
+            self.emitted_fns.insert("iface_obj_" + mono_iface_name, true)
+            s = s + "typedef struct _" + mono_iface_name + "_vtable {\n"
+            mut vi = 0
+            while vi < iface.methods.len:
+                mut vm = iface.methods.get(vi)
+                mut vret = self.type_to_c(vm.ret_ty)
+                s = s + "    " + vret + " (*" + vm.name + ")(void* self"
+                mut vj = 0
+                while vj < vm.params.len:
+                    mut vp = vm.params.get(vj)
+                    if vp.name != "self":
+                        s = s + ", " + self.type_to_c(vp.ty) + " " + vp.name
+                    vj = vj + 1
+                s = s + ");\n"
+                vi = vi + 1
+            s = s + "} " + mono_iface_name + "_vtable;\n\n"
+            s = s + "typedef struct { " + mono_iface_name + "_vtable* vtable; void* data; } " + mono_iface_name + "_obj;\n\n"
+        s = s + "static inline " + mono_iface_name + "_obj " + cls_name + "_as_" + mono_iface_name + "(" + cls_name + "* self) {\n"
+        s = s + "    static const " + mono_iface_name + "_vtable _vtbl_" + cls_name + "_" + mono_iface_name + " = {\n"
         mut mi = 0
         while mi < iface.methods.len:
             mut m = iface.methods.get(mi)
@@ -1905,8 +2130,9 @@ pub class CGenerator:
             s = s + "        ." + m.name + " = (" + cast_sig + ")(" + cls_name + "_" + m.name + "),\n"
             mi = mi + 1
         s = s + "    };\n"
-        s = s + "    return (" + iface.name + "_obj){ .vtable = (" + iface.name + "_vtable*)&_vtbl_" + cls_name + "_" + iface.name + ", .data = (void*)self };\n"
+        s = s + "    return (" + mono_iface_name + "_obj){ .vtable = (" + mono_iface_name + "_vtable*)&_vtbl_" + cls_name + "_" + mono_iface_name + ", .data = (void*)self };\n"
         s = s + "}\n"
+        self.type_subst = old_subst
         return s
 
     # -- Expression generation -------------------------------------------------
@@ -1932,17 +2158,30 @@ pub class CGenerator:
                 if v: return "true"
                 else: return "false"
             case HirExpr.ELitNone(_): return "NULL"
-            case HirExpr.EIdent(n, _, _):
+            case HirExpr.EIdent(n, _ei_ty, _):
                 # Inside an outlined closure body, a captured variable is reached
                 # by-reference through the env pointer (preserves live read/write).
                 if self.closure_env_var != "" and self.closure_cap_set.contains(n):
                     return "(*(__env->p_" + _safe_c_varname(n) + "))"
                 if _is_c_keyword(n) and self.decl_vars.contains(n): return "_tr_v_" + n
-                if n == "argv" and self.cur_func == "main": return "_tr_main_argv"
                 # A top-level function used as a value (not a call target) is a
                 # zero-cost TrFnVal: its address as .fn, NULL .env (bare function,
                 # not a closure -- see gen_call's dispatch on .env).
                 if self.functions.contains(n) and not self.decl_vars.contains(n): return "((TrFnVal){(void*)" + n + ", NULL})"
+                # A STATIC CLASS METHOD referenced as a bare value (`Foo.make`, no
+                # call) lowers in sema to an EIdent naming the qualified C function
+                # ("Foo_make") with a `def(...)->R` HIR type -- but it isn't in
+                # `self.functions` (that registry is top-level `def` decls only, not
+                # class methods), so the check just above misses it and this used to
+                # fall through to a bare, unwrapped `Foo_make`, a raw C function
+                # pointer where callers of a `def(...)->R`-typed value expect a
+                # `TrFnVal` struct (e.g. passing it into a `Vec[def(...)->R]` or a
+                # generic struct field), an "incompatible type" C error. Any
+                # `def`-typed identifier that isn't a local variable can only be a
+                # bare callable reference, so it needs this exact same wrapping
+                # regardless of which registry it came from.
+                if _ei_ty.name == "def" and not self.decl_vars.contains(n) and not self.functions.contains(n):
+                    return "((TrFnVal){(void*)" + n + ", NULL})"
                 return n
             case HirExpr.EBinOp(op, l, r, _): return self.gen_binop(op, l, r)
             case HirExpr.EUnaryOp(op, expr, _): return self.gen_unary(op, expr)
@@ -1984,6 +2223,15 @@ pub class CGenerator:
                     if cast_src_ty == "def" or cast_src_ty == "lambda":
                         mut _fv_c_ty = self.type_to_c(target_ty)
                         return "({ TrFnVal __fv = (" + self.gen_expr(expr) + "); (" + _fv_c_ty + ")(__fv.env ? __fv.env : (void*)__fv.fn); })"
+                # Pointer[T] -> def(...)->R / lambda: the reverse of the case
+                # above. A raw pointer (e.g. a dynamically-loaded native
+                # function, `SDL_GL_GetProcAddress`-style) has no env/closure
+                # state, so it wraps as a bare TrFnVal with `.env == NULL` --
+                # exactly the same shape a top-level function reference gets
+                # in EIdent above, and gen_call's `env == NULL` branch already
+                # calls `.fn` with no extra argument for that shape.
+                if (target_ty.name == "def" or target_ty.name == "lambda") and hir_expr_type(expr).name == "Pointer":
+                    return "((TrFnVal){(void*)(" + self.gen_expr(expr) + "), NULL})"
                 # `as str`: TrStr is a struct, can't C-cast to it. If the source
                 # expr is already str-typed it's a no-op; otherwise it's a
                 # generic/void* result (e.g. Dict.get(k) as str) - unbox it.
@@ -2804,6 +3052,37 @@ pub class CGenerator:
     # constructions and owned (`-> T`) call results are already rc=1 (no retain);
     # aliases (a tracked local, a field read) and `-> ref` borrows are retained.
     # Returning a tracked local transfers ownership (excluded from drops) → no retain.
+    # A function declared `-> SomeInterface` (a concrete interface name used directly as
+    # the return type, not a generic bound) type-checks a `return ConcreteClass(...)`
+    # under sema, but the C return slot is the interface's `{vtable*, data}` dyn-dispatch
+    # box (`SomeInterface_obj`), not the class's raw pointer — so the bare pointer needs
+    # boxing via the same `Class_as_Iface(...)` wrapper used for interface-typed params/
+    # locals. `s` is the already-fully-computed (retained/flushed) return expression;
+    # this only adds the box, so it is safe to apply as the last step before `return`.
+    pub def iface_wrap_return(self, e: Pointer[HirExpr], s: str) -> str:
+        return self.iface_wrap_to(self.cur_ret_ty, e, s)
+
+    # General form of the interface-boxing fix above: box `s` (the already-fully-
+    # computed value expression for `e`) into `Class_as_Iface(...)` when `target_ty`
+    # is a registered interface and `e`'s own static type is a concrete class — used
+    # by both `return` (target_ty = cur_ret_ty) and plain assignment `lhs = rhs`
+    # (target_ty = the lhs's declared type, e.g. an interface-typed field/local).
+    # A no-op (returns `s` unchanged) whenever target_ty isn't an interface or `e`
+    # isn't a concrete class, so it's always safe to call speculatively.
+    pub def iface_wrap_to(self, target_ty: AstType, e: Pointer[HirExpr], s: str) -> str:
+        if not self.interfaces.contains(target_ty.name): return s
+        mut _r_iface = self.interfaces.get(target_ty.name)
+        mut _r_iface_name = target_ty.name
+        if _r_iface.generics.len > 0 and target_ty.args.len > 0:
+            _r_iface_name = target_ty.name + "_" + self.type_args_suffix(target_ty.args)
+        mut _r_val_ty = hir_expr_type(e)
+        mut _r_val_ty_n = _r_val_ty.name
+        if not self.classes.contains(_r_val_ty_n): return s
+        mut _r_cls = self.classes.get(_r_val_ty_n)
+        if _r_cls.generics.len > 0 and _r_val_ty.args.len > 0:
+            _r_val_ty_n = _r_val_ty_n + "_" + self.type_args_suffix(_r_val_ty.args)
+        return _r_val_ty_n + "_as_" + _r_iface_name + "(" + s + ")"
+
     pub def obj_retain_wrap(self, e: Pointer[HirExpr], s: str, is_return: bool) -> str:
         if _is_invalid_ptr(e as usize): return s
         if not self.is_heap_class_tn(hir_expr_type(e).name): return s
@@ -3709,7 +3988,18 @@ pub class CGenerator:
 
         # Class constructor call: ClassName() or GenericClass[T]()
         match callee.read():
-            case HirExpr.EIdent(n, ident_ty, _):
+            case HirExpr.EIdent(n0, ident_ty, _):
+                # `T()` inside a monomorphized generic body: `n0` is still the literal,
+                # erased type-parameter name ("T") -- resolve it through the active
+                # substitution to the concrete type actually being constructed here,
+                # same mechanism already used to resolve `T.static_method()` and
+                # duck-typed field access through a generic-typed receiver elsewhere
+                # in this file. Without this, `self.classes.contains(n0)` below is
+                # false for "T" (it's never a registered class), and construction
+                # falls through to the generic call fallback, emitting a bogus `T()`
+                # call to an undeclared function instead of allocating the real type.
+                mut n = n0
+                if self.type_subst.contains(n): n = self.resolve_generic_tyname(n)
                 if self.classes.contains(n) and n != "Vec" and n != "Map" and n != "Dict" and n != "List":
                     mut ucls = self.classes.get(n)
                     # Value type (@value_type): construct on the STACK by value, no
@@ -3851,12 +4141,28 @@ pub class CGenerator:
             # Infer the single type param from a parameter declared directly as that
             # param (x: T), emit a monomorphized copy, and dispatch to it — zero-cost,
             # like a Rust generic. (Explicit fname[T](..) is mangled in sema and driven
-            # by the mono scan; multi-param generics keep the erased path for now.)
+            # by the mono scan.)
             if fn_def.class_name == "" and fn_def.generics.len == 1:
                 mut _targ = self.infer_generic_targ(callee_s, args)
                 if _targ != "":
                     self.ensure_mono_func(callee_s, _targ)
                     return callee_s + "__MONO_" + _targ + "(" + self.gen_args(args) + ")"
+            # Multi-param generic free function called by inference: as above, but for
+            # 2+ generics — one inferred directly from a param, the rest (if any) cross-
+            # referenced from that concrete type's own generic-interface bounds (e.g. `RS`
+            # in `[C: DbConnection[RS], RS: DbResultSet]` isn't any param's own type, but
+            # `class MyConn implements DbConnection[MyRS]` records what RS resolves to).
+            elif fn_def.class_name == "" and fn_def.generics.len > 1:
+                mut _targs_m = self.infer_generic_targs_multi(callee_s, args)
+                if _targs_m.len == fn_def.generics.len:
+                    self.ensure_mono_func_n(callee_s, _targs_m)
+                    mut _tjoined = ""
+                    mut _tji = 0
+                    while _tji < _targs_m.len:
+                        if _tji > 0: _tjoined = _tjoined + "_"
+                        _tjoined = _tjoined + _targs_m.get(_tji)
+                        _tji = _tji + 1
+                    return callee_s + "__MONO_" + _tjoined + "(" + self.gen_args(args) + ")"
             mut any_wrapped = false
             mut ai = 0
             while ai < args.len:
@@ -3920,19 +4226,94 @@ pub class CGenerator:
             # def(...)->R value whose OWN return type is itself def(...)->R or
             # another struct-by-value type like str/Tuple/Option/Result).
             if ret_cty == "void" or ret_cty == "void*" or ret_cty == "TrFnVal": ret_cty = "long long"
+            # Prefer the CALLEE's own declared `def(P1, P2, ...) -> R` parameter
+            # types (when the HIR carries the full signature -- true for a
+            # callable FIELD like `Mapper[T].load: def(DbResultSet) -> T`, see
+            # sema.tr's callable-field-call lowering) over each argument's own
+            # type. These differ, and matter, exactly when a declared param is
+            # an INTERFACE (`DbResultSet`) but the argument passed is a
+            # concrete class implementing it (`SqliteResultSet`, RS
+            # monomorphized) -- the real function's C signature takes the
+            # boxed `DbResultSet_obj` (a 16-byte {vtable,data} struct;
+            # `type_to_c` on an interface name already produces this), while
+            # the argument's own type casts to a bare `SqliteResultSet*` (an
+            # 8-byte pointer). Casting the function pointer using the
+            # ARGUMENT's type and passing the UNBOXED pointer both silently
+            # succeeded compilation (a `TrFnVal`-indirect call is one
+            # implicit `void*`-typed C function pointer cast, unchecked by
+            # the C compiler) and corrupted the stack at the call --
+            # confirmed directly with a minimal, DB-unrelated repro
+            # (crashed with no diagnostic, not a compile error).
+            mut _callee_full_ty = hir_expr_type(callee)
+            mut _has_declared_sig = _callee_full_ty.name == "def" and _callee_full_ty.args.len > args.len
+            # Only substitute in the DECLARED param type when it's actually an
+            # INTERFACE (after resolving it through the active `type_subst`,
+            # in case it's still a bare generic name like "T" this is the
+            # concrete substitution for) -- that's the one case where it
+            # legitimately differs from the argument's own type and matters
+            # (the boxed `_obj` struct vs. the concrete class's raw pointer;
+            # see the box-args block below). Otherwise (a plain scalar/class
+            # param, or a declared type that's still an unresolved generic
+            # name because this call isn't inside a monomorphized body at
+            # all -- e.g. a plain, non-generic caller invoking a stored
+            # `Mapper[Post].dump: def(T) -> Vec[str]` field directly) keep
+            # using the ARGUMENT's own type, the original, correct behavior:
+            # using the raw unresolved declared name ("T") here previously
+            # produced literal nonsense like `(T*)` in the cast, confirmed
+            # directly.
             mut arg_types = ""
             mut ai2 = 0
             while ai2 < args.len:
                 if ai2 > 0: arg_types = arg_types + ", "
-                arg_types = arg_types + self.type_to_c(hir_expr_type(args.get(ai2)))
+                mut _at2 = hir_expr_type(args.get(ai2))
+                if _has_declared_sig:
+                    mut _decl2 = _callee_full_ty.args.get(ai2).read()
+                    mut _decl2_n = _decl2.name
+                    if self.type_subst.contains(_decl2_n): _decl2_n = self.resolve_generic_tyname(_decl2_n)
+                    if self.interfaces.contains(_decl2_n): _at2 = AstType.init(_decl2_n)
+                arg_types = arg_types + self.type_to_c(_at2)
                 ai2 = ai2 + 1
             # A def-typed value is a TrFnVal {fn, env} struct: a CLOSURE has a
             # non-NULL env (call `fn` with the env as the hidden first arg); a
             # bare NAMED-function reference has env==NULL (call `fn` directly).
             # No pointer-bit tagging (that scheme broke on ARM/Thumb, where bit 0
-            # of every function pointer is already fixed to 1 by the ABI). `gen_args`
-            # is emitted once and reused in both arms; only the taken arm runs.
+            # of every function pointer is already fixed to 1 by the ABI).
+            # Box each argument into the declared param's interface type when
+            # needed (same condition/mechanism as gen_iface_wrapped_args, used
+            # for ordinary non-indirect calls) -- `gen_args` alone never boxes.
             mut _cargs = self.gen_args(args)
+            if _has_declared_sig:
+                mut _any_iface = false
+                mut _bi = 0
+                while _bi < args.len:
+                    mut _declared_n = _callee_full_ty.args.get(_bi).read().name
+                    if self.interfaces.contains(_declared_n):
+                        mut _actual_n = self.resolve_generic_tyname(hir_expr_type(args.get(_bi)).name)
+                        if self.classes.contains(_actual_n): _any_iface = true
+                    _bi = _bi + 1
+                if _any_iface:
+                    mut _boxed = ""
+                    _bi = 0
+                    while _bi < args.len:
+                        if _bi > 0: _boxed = _boxed + ", "
+                        mut _arg_s2 = self.gen_expr(args.get(_bi))
+                        mut _declared_ty2 = _callee_full_ty.args.get(_bi).read()
+                        mut _declared_n2 = _declared_ty2.name
+                        if self.interfaces.contains(_declared_n2):
+                            mut _expected_iface2 = _declared_n2
+                            mut _ep_iface2 = self.interfaces.get(_declared_n2)
+                            if _ep_iface2.generics.len > 0 and _declared_ty2.args.len > 0:
+                                _expected_iface2 = _expected_iface2 + "_" + self.type_args_suffix(_declared_ty2.args)
+                            mut _actual_n2 = self.resolve_generic_tyname(hir_expr_type(args.get(_bi)).name)
+                            if self.classes.contains(_actual_n2):
+                                mut _acls2 = self.classes.get(_actual_n2)
+                                mut _actual_ty_full2 = hir_expr_type(args.get(_bi))
+                                if _acls2.generics.len > 0 and _actual_ty_full2.args.len > 0:
+                                    _actual_n2 = _actual_n2 + "_" + self.type_args_suffix(_actual_ty_full2.args)
+                                _arg_s2 = _actual_n2 + "_as_" + _expected_iface2 + "(" + _arg_s2 + ")"
+                        _boxed = _boxed + _arg_s2
+                        _bi = _bi + 1
+                    _cargs = _boxed
             mut env_sig = "void*"
             if arg_types != "": env_sig = "void*, " + arg_types
             mut dir_sig = arg_types
@@ -4405,12 +4786,23 @@ pub class CGenerator:
                 return "_tr_ptr_to_f64((void*)(uintptr_t)" + _tslot + ")"
             return _tslot
 
-        # Fallback: when HIR stores void for an EPropAccess type (cross-module field lookup),
-        # recover the actual type from the parent class field declaration
+        # Fallback: when HIR stores void for an EPropAccess type (cross-module field lookup,
+        # or a field read off a generic-param-typed receiver whose real field types can't be
+        # known until monomorphization -- e.g. `obj.n.to_str()` where `obj: T`), recover the
+        # actual type from the parent class field declaration.
         if t_n == "void" or t_n == "":
             match obj.read():
                 case HirExpr.EPropAccess(inner_obj_fb, field_name_fb, _):
                     mut inner_t_n_fb: str = hir_expr_type(inner_obj_fb).name
+                    # Inside a monomorphized body, the inner receiver may still carry its
+                    # DECLARED generic param name (e.g. "T") rather than the concrete type
+                    # substituted for it -- resolve that first, same as this function's own
+                    # `t_n` above, or the field lookup below never matches any real class and
+                    # `t_n` is left unresolved, silently dropping the method call in codegen
+                    # (e.g. `obj.n.to_str()` compiling to just `obj->n`, an int where a TrStr
+                    # was expected).
+                    if self.type_subst.contains(inner_t_n_fb):
+                        inner_t_n_fb = self.resolve_generic_tyname(inner_t_n_fb)
                     if inner_t_n_fb == "void" or inner_t_n_fb == "":
                         inner_t_n_fb = self.cur_class
                     if self.classes.contains(inner_t_n_fb):
@@ -5112,6 +5504,18 @@ pub class CGenerator:
         # Also recover for built-in collection types used in static calls (Vec.init, List.init, etc.)
         if (class_name == "void" or class_name == "") and (obj_s == "Vec" or obj_s == "List" or obj_s == "Map" or obj_s == "Dict"):
             class_name = obj_s
+        # Static call through a GENERIC TYPE PARAMETER inside a monomorphized body
+        # (`T.make(n)` where `[T]` is the enclosing generic function/method's own
+        # type param, `obj_s` is the literal parameter name "T"): sema can't resolve
+        # `T`'s type before monomorphization (it isn't a registered class, so
+        # `hir_expr_type(obj)` is void/empty, same as the ordinary static-call case
+        # just above), but by the time THIS body is generated, `self.type_subst`
+        # already maps "T" to the concrete C type for this monomorphization.
+        # Without this, the call silently fell through further below to a bare
+        # global-function fallback, emitting `make(T, n)` (an undeclared `make`
+        # called with the undeclared identifier `T`) instead of `Foo_make(n)`.
+        if (class_name == "void" or class_name == "") and self.type_subst.contains(obj_s):
+            class_name = self.resolve_generic_tyname(obj_s)
 
         # StringBuilder special handling (must be before len/length shortcut)
         if class_name == "StringBuilder":
@@ -5207,17 +5611,43 @@ pub class CGenerator:
         if self.classes.contains(class_name) and class_name != "Vec" and class_name != "Map" and class_name != "Dict" and class_name != "List":
             # Generic METHOD (its own `[T]`): monomorphize per inferred type arg and
             # dispatch to the specialized copy (like a generic free function, but with self).
-            mut _mtarg = self.infer_method_targ(class_name, method, args)
-            if _mtarg != "":
-                self.ensure_mono_method(class_name, method, _mtarg)
-                mut _mm = class_name + "_" + method + "__MONO_" + _mtarg + "(" + obj_s
-                if args.len > 0: _mm = _mm + ", " + self.gen_args(args)
-                return _mm + ")"
+            # Only when the ENCLOSING CLASS ITSELF is non-generic (`Wrapper.echo[T]` on a
+            # plain `class Wrapper:`) -- a method's `[T]` on an ALREADY-generic class
+            # (`class Bag[T]:` ... `def add[T](self, obj: T):`, repeating the class's own
+            # T per convention, not introducing a distinct one) is already covered by the
+            # class-level monomorphization (`Bag_Foo_add`, emitted alongside `Bag_Foo`
+            # itself), which handles the correct `self` type. Without this guard,
+            # `infer_method_targ` still matches (the method's generics list is non-empty
+            # and its param type name equals the class's own generic name), and
+            # `ensure_mono_method` wrongly treats it as the OTHER case, emitting a
+            # `<Cls>_<method>__MONO_<targ>` forward declaration typed `Cls* self` --
+            # `Cls` being the bare, un-monomorphized generic class name, which doesn't
+            # exist as a C type (`unknown type name 'Bag'`), alongside a conflicting,
+            # correctly-mangled `Cls_Targ_method` definition from the real path.
+            mut _cls_for_mtarg = self.classes.get(class_name)
+            if _cls_for_mtarg.generics.len == 0:
+                mut _mtarg = self.infer_method_targ(class_name, method, args)
+                if _mtarg != "":
+                    self.ensure_mono_method(class_name, method, _mtarg)
+                    mut _mm = class_name + "_" + method + "__MONO_" + _mtarg + "(" + obj_s
+                    if args.len > 0: _mm = _mm + ", " + self.gen_args(args)
+                    return _mm + ")"
             mut method_c: str = method
             if _is_c_keyword(method_c): method_c = "_tr_fn_" + method_c
             if method == "init" or method == "new":
                 return class_name + "_" + method_c + "(" + self.gen_args(args) + ")"
-            if obj_s == class_name:
+            # `obj_s == class_name` catches an ordinary bare-class-name static call
+            # (`Foo.make(n)`, `obj_s` IS the literal text "Foo"). A static call
+            # through a GENERIC TYPE PARAMETER (`T.make(n)` inside a monomorphized
+            # body) has `obj_s == "T"` -- the literal, unresolved parameter name --
+            # even though `class_name` was already resolved to the concrete type
+            # above, so this equality alone misses it and falls through to the
+            # INSTANCE-call path below, wrongly prepending "T" as an extra first
+            # argument (`Foo_make(T, n)`, "T" undeclared). `self.type_subst.
+            # contains(obj_s)` catches that case: a name only appears there when
+            # it's a generic type parameter being substituted, which can only mean
+            # this was a static reference through `T`, never a real instance value.
+            if obj_s == class_name or self.type_subst.contains(obj_s):
                 return class_name + "_" + method_c + "(" + self.gen_args(args) + ")"
             # Check if method exists in own class; if not, fall back to base class dispatch
             mut ucls_inh: HirClass = self.classes.get(class_name)
@@ -5328,8 +5758,30 @@ pub class CGenerator:
                     mut _ael = self.obj_retain_wrap(args.get(0), self.gen_expr(args.get(0)), false)
                     if self._obj_store_needs_retain(args.get(0)): _ael = "_tr_obj_retain(" + _ael + ")"
                     return "List_" + lsfx + "_append(" + obj_s + ", " + _ael + ")"
-                mut append_args = self.gen_args_strify(args, elem_sfx)
-                if lsfx == "TrStr": append_args = self.gen_args(args)
+                # Call gen_args_strify ONLY when its result is actually used.
+                # gen_args_strify has a side effect for a str-typed arg: it
+                # runs the argument expression through strz(), which (for a
+                # fresh, non-local str like a direct extern-call result)
+                # hoists it into its OWN wrap-temp via the shared
+                # wrap_temp_decls/wrap_temp_names state. Calling it and then
+                # discarding the result (the old code always called it, then
+                # overwrote append_args below when lsfx=="TrStr") still left
+                # that hoisted temp behind: the argument expression got
+                # generated a SECOND time by gen_args()/gen_args_casts right
+                # after, hoisting a SECOND, independent wrap-temp for the same
+                # underlying pointer. Both temps got released at the end of
+                # the statement, so a value like `_tr_get_arg(i)` (wraps a
+                # borrowed char* into a fresh TrStr each time it's evaluated)
+                # was wrapped and released TWICE for one logical argument —
+                # a genuine use-after-free once the List's own retained copy
+                # aliased memory a sibling temp had already freed. Observed as
+                # `Vec[str]().push(_tr_get_arg(i))` silently corrupting the
+                # string it stored.
+                mut append_args = ""
+                if lsfx == "TrStr":
+                    append_args = self.gen_args(args)
+                else:
+                    append_args = self.gen_args_strify(args, elem_sfx)
                 return "List_" + lsfx + "_append(" + obj_s + ", " + append_args + ")"
             if method == "free": return "List_" + lsfx + "_free(" + obj_s + ")"
             if method == "pop":
@@ -5340,12 +5792,20 @@ pub class CGenerator:
                         return "((" + call_ty.name + "*)" + pop_r + ")"
                 return pop_r
             if method == "set":
-                mut set_args = self.gen_args_strify(args, elem_sfx)
-                if lsfx == "TrStr": set_args = self.gen_args(args)
+                # Same discarded-side-effect hazard as push/append above.
+                mut set_args = ""
+                if lsfx == "TrStr":
+                    set_args = self.gen_args(args)
+                else:
+                    set_args = self.gen_args_strify(args, elem_sfx)
                 return "List_" + lsfx + "_set(" + obj_s + ", " + set_args + ")"
             if method == "contains":
-                mut contains_args = self.gen_args_strify(args, elem_sfx)
-                if lsfx == "TrStr": contains_args = self.gen_args(args)
+                # Same discarded-side-effect hazard as push/append above.
+                mut contains_args = ""
+                if lsfx == "TrStr":
+                    contains_args = self.gen_args(args)
+                else:
+                    contains_args = self.gen_args_strify(args, elem_sfx)
                 return "List_" + lsfx + "_contains(" + obj_s + ", " + contains_args + ")"
             if method == "get":
                 mut get_r = "List_" + lsfx + "_get(" + obj_s + ", " + self.gen_args(args) + ")"
@@ -5375,8 +5835,12 @@ pub class CGenerator:
             if method == "extend":
                 return "List_" + lsfx + "_extend(" + obj_s + ", " + self.gen_args(args) + ")"
             if method == "index_of":
-                mut idx_args = self.gen_args_strify(args, elem_sfx)
-                if lsfx == "TrStr": idx_args = self.gen_args(args)
+                # Same discarded-side-effect hazard as push/append above.
+                mut idx_args = ""
+                if lsfx == "TrStr":
+                    idx_args = self.gen_args(args)
+                else:
+                    idx_args = self.gen_args_strify(args, elem_sfx)
                 return "List_" + lsfx + "_index_of(" + obj_s + ", " + idx_args + ")"
             if method == "count" and args.len > 0:
                 if lsfx == "TrStr":
@@ -5560,7 +6024,14 @@ pub class CGenerator:
                 if method == "get_or" and args.len >= 2:
                     return "(" + dp + "_has(" + obj_s + ", " + dkey + ") ? " + dp + "_get(" + obj_s + ", " + dkey + ") : (" + self.gen_expr(args.get(1)) + "))"
             if method == "init" or method == "new":
-                if is_idict: return "_tr_idict_new(" + self.gen_args(args) + ")"
+                # _tr_dict_new/_tr_idict_new take a required capacity-hint arg; a bare
+                # `Dict[K,V].init()` (no args) must default it, same as Set[T]/List[T]'s
+                # own no-arg .init() do — otherwise this forwarded zero args straight
+                # into a 1-arg C function ("too few arguments to function").
+                if is_idict:
+                    if args.len == 0: return "_tr_idict_new(16)"
+                    return "_tr_idict_new(" + self.gen_args(args) + ")"
+                if args.len == 0: return "_tr_dict_new(16)"
                 return "_tr_dict_new(" + self.gen_args(args) + ")"
             # `get_index` is the desugaring of d[key] (read context); treat it
             # exactly like `.get` so str values are unboxed.
@@ -5894,6 +6365,24 @@ pub class CGenerator:
             self.w("    void* _r = (void*)(uintptr_t)_tr_str_box(" + call_s + ");\n")
             self.w("    free(_a);\n")
             self.w("    return _r;\n")
+        elif ret_name == "Result" or ret_name == "Option" or ret_name == "Tuple" or ret_name == "tuple":
+            # `Result`/`Option`/`Tuple` are STRUCTS (a tagged union / aggregate),
+            # not scalars or pointers -- `(void*)(uintptr_t)(a_struct_value)` is
+            # not valid C (the fallthrough `else` branch below did exactly this,
+            # "aggregate value used where an integer was expected", a real
+            # compile error, confirmed directly with a minimal, tauorm-unrelated
+            # repro: `async def f() throws E -> T` for any T, called via
+            # `await`). Heap-allocate room for the struct, copy the return VALUE
+            # into it, and hand back the POINTER through the same void* channel
+            # every other return type already uses -- gen_await_call/
+            # gen_await_timeout_call dereference and free it on the other end.
+            mut _agg_c_ty = "Result"
+            if ret_name == "Option": _agg_c_ty = "Option"
+            elif ret_name == "Tuple" or ret_name == "tuple": _agg_c_ty = "TrTuple"
+            self.w("    " + _agg_c_ty + "* _rp = (" + _agg_c_ty + "*)_tr_checked_alloc(sizeof(" + _agg_c_ty + "));\n")
+            self.w("    *_rp = (" + call_s + ");\n")
+            self.w("    free(_a);\n")
+            self.w("    return (void*)_rp;\n")
         else:
             self.w("    void* _r = (void*)(uintptr_t)(" + call_s + ");\n")
             self.w("    free(_a);\n")
@@ -5942,6 +6431,15 @@ pub class CGenerator:
                     s = s + "(" + c_ret + ")_r" + tmp + "; })"
                 elif _is_str_type(ret_name):
                     s = s + "_tr_str_unbox((void*)(uintptr_t)_r" + tmp + "); })"
+                elif ret_name == "Result" or ret_name == "Option" or ret_name == "Tuple" or ret_name == "tuple":
+                    # Mirror of emit_async_wrapper_for_call's heap-allocate-and-box
+                    # for the same aggregate types: dereference the struct back out
+                    # of the pointer the wrapper returned, free that allocation,
+                    # then yield the struct VALUE as this whole expression's result.
+                    mut _agg_c_ty2 = "Result"
+                    if ret_name == "Option": _agg_c_ty2 = "Option"
+                    elif ret_name == "Tuple" or ret_name == "tuple": _agg_c_ty2 = "TrTuple"
+                    s = s + _agg_c_ty2 + " _rv" + tmp + " = *((" + _agg_c_ty2 + "*)(uintptr_t)_r" + tmp + "); free((void*)(uintptr_t)_r" + tmp + "); _rv" + tmp + "; })"
                 else:
                     mut c_ret2 = self.type_to_c(call_ty)
                     if c_ret2 == "void" or c_ret2 == "": c_ret2 = "void*"
@@ -5994,6 +6492,11 @@ pub class CGenerator:
                     s = s + "(" + c_ret + ")_rto" + tmp + "; })"
                 elif _is_str_type(ret_name):
                     s = s + "_tr_str_unbox((void*)(uintptr_t)_rto" + tmp + "); })"
+                elif ret_name == "Result" or ret_name == "Option" or ret_name == "Tuple" or ret_name == "tuple":
+                    mut _agg_c_ty3 = "Result"
+                    if ret_name == "Option": _agg_c_ty3 = "Option"
+                    elif ret_name == "Tuple" or ret_name == "tuple": _agg_c_ty3 = "TrTuple"
+                    s = s + _agg_c_ty3 + " _rvto" + tmp + " = *((" + _agg_c_ty3 + "*)(uintptr_t)_rto" + tmp + "); free((void*)(uintptr_t)_rto" + tmp + "); _rvto" + tmp + "; })"
                 else:
                     mut c_ret2 = self.type_to_c(call_ty)
                     if c_ret2 == "void" or c_ret2 == "": c_ret2 = "void*"
@@ -6253,6 +6756,15 @@ pub class CGenerator:
         mut saved_buf = self.buf
         mut saved_cap = self.closure_cap_set
         mut saved_env = self.closure_env_var
+        # A closure is never itself `throws` (lambda/`def(...)->R` closures carry
+        # no throws annotation in their type — see transaction.tr's note on this
+        # in the tausqlite3 library). Without resetting this, a closure literal
+        # written inside a throws function's body inherited that OUTER function's
+        # cur_throws_ty, so `raise(...)` inside the closure wrongly emitted
+        # `return Result_Err(...)` (a Result, mismatching the closure's real
+        # `long long`/void C return type) instead of `_tr_exc_raise(...)`.
+        mut saved_throws = self.cur_throws_ty
+        self.cur_throws_ty = ""
         self.buf = StringBuilder.init(512)
         self.closure_cap_set = Map[str, bool].init(8)
         mut cj = 0
@@ -6276,6 +6788,7 @@ pub class CGenerator:
         self.buf = saved_buf
         self.closure_cap_set = saved_cap
         self.closure_env_var = saved_env
+        self.cur_throws_ty = saved_throws
         self.closure_buf.append(thisdef)
 
         # Capture-address list (shared by heap and stack forms). If we are inside
@@ -6709,7 +7222,8 @@ pub class CGenerator:
                     match e.read():
                         case HirExpr.ETryExpr(inner_try, _):
                             mut tmp_qr = "_qr" + self.next_temp()
-                            self.w(pad + "Result " + tmp_qr + " = (" + self.gen_expr(inner_try) + ");\n")
+                            mut inner_qr_v = self.flush_wraps(self.gen_expr(inner_try), false)
+                            self.w(pad + "Result " + tmp_qr + " = (" + inner_qr_v + ");\n")
                             self.w(pad + "if (" + tmp_qr + ".tag == Result_Err) return " + tmp_qr + ";\n")
                             return
                         case _: pass
@@ -6742,7 +7256,8 @@ pub class CGenerator:
                     match e.read():
                         case HirExpr.ETryExpr(inner_try2, ok_ty2):
                             mut tmp_qr2 = "_qr" + self.next_temp()
-                            self.w(pad + "Result " + tmp_qr2 + " = (" + self.gen_expr(inner_try2) + ");\n")
+                            mut inner_qr_v2 = self.flush_wraps(self.gen_expr(inner_try2), false)
+                            self.w(pad + "Result " + tmp_qr2 + " = (" + inner_qr_v2 + ");\n")
                             self.w(pad + "if (" + tmp_qr2 + ".tag == Result_Err) return " + tmp_qr2 + ";\n")
                             if self.cur_throws_ty != "":
                                 mut ok_c2 = self.type_to_c(ok_ty2)
@@ -6752,8 +7267,14 @@ pub class CGenerator:
                                     self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=" + tmp_qr2 + ".data.Ok.val});\n")
                             else:
                                 mut ok_c2b = self.type_to_c(ok_ty2)
-                                if _is_int_type(ok_ty2.name) or ok_ty2.name == "bool":
+                                if _is_int_type(ok_ty2.name) or ok_ty2.name == "bool" or ok_ty2.name == "char":
                                     self.w(pad + "return (" + ok_c2b + ")(uintptr_t)" + tmp_qr2 + ".data.Ok.val;\n")
+                                elif _is_float_type(ok_ty2.name):
+                                    self.w(pad + "return _tr_ptr_to_f64(" + tmp_qr2 + ".data.Ok.val);\n")
+                                elif _is_str_type(ok_ty2.name):
+                                    self.w(pad + "return _tr_str_unbox(" + tmp_qr2 + ".data.Ok.val);\n")
+                                elif ok_c2b.ends_with("*"):
+                                    self.w(pad + "return (" + ok_c2b + ")" + tmp_qr2 + ".data.Ok.val;\n")
                                 else:
                                     self.w(pad + "return (" + ok_c2b + "*)" + tmp_qr2 + ".data.Ok.val;\n")
                             return
@@ -6777,22 +7298,22 @@ pub class CGenerator:
                         if self.cur_ret_is_borrow:
                             # `-> ref` function: hand back the borrow as-is. No retain — the
                             # caller treats the result as a borrow and will not free it.
-                            self.w(pad + "return " + ret_s2 + ";\n")
+                            self.w(pad + "return " + self.iface_wrap_return(e, ret_s2) + ";\n")
                         elif self._expr_is_borrow_call(e):
                             # Owned-return function returning a `-> ref` call result: the
                             # callee did NOT retain, so OWN it here (retain) before handing
                             # it back as an owned value the caller will free.
                             if self.is_heap_class_tn(hir_expr_type(e).name):
-                                self.w(pad + "return _tr_obj_retain(" + ret_s2 + ");\n")
+                                self.w(pad + "return " + self.iface_wrap_return(e, "_tr_obj_retain(" + ret_s2 + ")") + ";\n")
                             elif _is_str_type(hir_expr_type(e).name):
                                 self.w(pad + "return _tr_str_retain(" + ret_s2 + ");\n")
                             else:
-                                self.w(pad + "return " + ret_s2 + ";\n")
+                                self.w(pad + "return " + self.iface_wrap_return(e, ret_s2) + ";\n")
                         else:
                             # str + heap-class owned returns: retain a borrowed/aliased
                             # result (self, a field) so the caller owns a counted ref;
                             # a returned local transfers (no retain — excluded from drops).
-                            self.w(pad + "return " + self.obj_retain_wrap(e, self.str_retain_wrap(e, ret_s2, true), true) + ";\n")
+                            self.w(pad + "return " + self.iface_wrap_return(e, self.obj_retain_wrap(e, self.str_retain_wrap(e, ret_s2, true), true)) + ";\n")
             case HirStmt.SLet(n, _, _, is_const, is_shared, ty, v):
                 # Record a generic-class local's mono C prefix up front (before any
                 # branch), so an SAutoDrop free/drop names the concrete instance. The
@@ -6868,13 +7389,23 @@ pub class CGenerator:
                     match v.read():
                         case HirExpr.ETryExpr(inner_try3, ok_ty3):
                             mut tmp_qr3 = "_qr" + self.next_temp()
-                            self.w(pad + "Result " + tmp_qr3 + " = (" + self.gen_expr(inner_try3) + ");\n")
+                            mut inner_qr_v3 = self.flush_wraps(self.gen_expr(inner_try3), false)
+                            self.w(pad + "Result " + tmp_qr3 + " = (" + inner_qr_v3 + ");\n")
                             self.w(pad + "if (" + tmp_qr3 + ".tag == Result_Err) return " + tmp_qr3 + ";\n")
                             mut ok_c3 = self.type_to_c(ok_ty3)
                             if ok_c3 == "void" or ok_c3 == "__auto_type": ok_c3 = "long long"
                             mut ok_val3 = ""
                             if _is_int_type(ok_ty3.name) or ok_ty3.name == "bool" or ok_ty3.name == "char":
                                 ok_val3 = "(" + ok_c3 + ")(uintptr_t)" + tmp_qr3 + ".data.Ok.val"
+                            elif _is_float_type(ok_ty3.name):
+                                ok_val3 = "_tr_ptr_to_f64(" + tmp_qr3 + ".data.Ok.val)"
+                            elif _is_str_type(ok_ty3.name):
+                                ok_val3 = "_tr_str_unbox(" + tmp_qr3 + ".data.Ok.val)"
+                            elif ok_c3.ends_with("*"):
+                                # type_to_c already returned a pointer type (heap class) —
+                                # cast straight to it; appending another '*' here produced a
+                                # double-pointer ("Statement**") and a compile error.
+                                ok_val3 = "(" + ok_c3 + ")" + tmp_qr3 + ".data.Ok.val"
                             else:
                                 ok_val3 = "(" + ok_c3 + "*)" + tmp_qr3 + ".data.Ok.val"
                             if is_const:
@@ -7028,7 +7559,19 @@ pub class CGenerator:
                                 if self._expr_is_borrow_call(v):
                                     init_s = "_tr_str_retain(" + init_s + ")"
                                 match v.read():
-                                    case HirExpr.EPropAccess(_, _, _): pass
+                                    case HirExpr.EPropAccess(_, _, _):
+                                        # #21-style: a str FIELD read used as a fresh
+                                        # local's initializer is a borrow of the
+                                        # object's own ref; this local OWNS it
+                                        # (released at scope exit like any other
+                                        # tracked local), so retain here too — else
+                                        # a later mutation of the source object frees
+                                        # the field's buffer out from under this
+                                        # local (UAF; str_retain_wrap only retains an
+                                        # EPropAccess source on a `-> str` RETURN, not
+                                        # on a plain local binding like this one).
+                                        init_s = "_tr_str_retain(" + init_s + ")"
+                                        self.str_local_names.insert(n, true)
                                     case _: self.str_local_names.insert(n, true)
                         elif self.is_heap_class_tn(hir_expr_type(v).name) and not self.interfaces.contains(ty.name):
                             # Refcounted heap class. A proven borrow is a zero-cost
@@ -7080,10 +7623,20 @@ pub class CGenerator:
                                     _sa_rhs = self.str_retain_wrap(v, _sa_rhs, false)
                                     if self._expr_is_borrow_call(v):
                                         _sa_rhs = "_tr_str_retain(" + _sa_rhs + ")"   # own not-proven borrow
-                                    self.w(pad + "TrStr " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
+                                    # #21-style: a str FIELD read used as a fresh
+                                    # local's initializer is a borrow of the
+                                    # object's own ref; this local OWNS it, so
+                                    # retain here too — else a later mutation of
+                                    # the source object frees the field's buffer
+                                    # out from under this local (UAF; same gap as
+                                    # SLet above, str_retain_wrap only retains an
+                                    # EPropAccess source on a `-> str` return).
                                     match v.read():
-                                        case HirExpr.EPropAccess(_, _, _): pass
-                                        case _: self.str_local_names.insert(n, true)
+                                        case HirExpr.EPropAccess(_, _, _):
+                                            _sa_rhs = "_tr_str_retain(" + _sa_rhs + ")"
+                                        case _: pass
+                                    self.w(pad + "TrStr " + _safe_c_varname(n) + " = " + _sa_rhs + ";\n")
+                                    self.str_local_names.insert(n, true)
                             elif self.is_heap_class_tn(hir_expr_type(v).name):
                                 # First assignment declares a heap-class local — same
                                 # retain/track as SLet (explicit T* since _tr_obj_retain
@@ -7248,6 +7801,11 @@ pub class CGenerator:
                             return
                         case _: pass
                     _assign_rhs = _crhs
+                # Assigning a concrete class value into an interface-typed slot (a field,
+                # since a bare-identifier local's first assignment is handled above at
+                # decl_vars/global_vars time): box it into the vtable-dispatch wrapper,
+                # same as SLet/return/call-arg sites already do.
+                _assign_rhs = self.iface_wrap_to(hir_expr_type(t), v, _assign_rhs)
                 self.w(pad + self.gen_expr(t) + " = " + _assign_rhs + ";\n")
             case HirStmt.SIf(c, t, e):
                 self.w(pad + "if (" + self.gen_cond_expr(c) + ") {\n")
@@ -7304,8 +7862,18 @@ pub class CGenerator:
                 self.gen_try(try_body, catches, finally_b, indent)
             case HirStmt.SRaise(e):
                 if self.cur_throws_ty != "":
-                    # throws function: raise becomes return Result_Err
-                    self.w(pad + "return ((Result){.tag=Result_Err, .data.Err.err=" + self.wrap_voidp_arg(e) + "});\n")
+                    # throws function: raise becomes return Result_Err. wrap_voidp_arg(e)
+                    # may itself have hoisted fresh-str-argument temps onto
+                    # wrap_temp_decls/wrap_temp_names (e.g. `raise(Err.init(rc, a + b))`,
+                    # where `a + b` is a fresh concat passed straight into the
+                    # constructor) — flush_wraps here builds the Result value inside a
+                    # statement-expression that declares/releases those temps, so they
+                    # stay scoped to THIS statement instead of leaking onto whatever the
+                    # C generator emits next (a real bug: the undeclared/leaked temp
+                    # previously surfaced in a LATER, unrelated function's body).
+                    mut errv = self.wrap_voidp_arg(e)
+                    mut result_v = self.flush_wraps("((Result){.tag=Result_Err, .data.Err.err=" + errv + "})", false)
+                    self.w(pad + "return " + result_v + ";\n")
                 else:
                     mut raise_s = self.gen_expr(e)
                     if _is_str_type(hir_expr_type(e).name): raise_s = self.strz(raise_s)
@@ -8446,12 +9014,19 @@ pub class CGenerator:
                                 mut gfunc_n = mn.slice(0, sep_p)
                                 mut gfunc_t = mn.slice(sep_p + 7, nlen)
                                 if self.functions.contains(gfunc_n):
-                                    self.ensure_mono_func(gfunc_n, gfunc_t)
+                                    mut _gf = self.functions.get(gfunc_n)
+                                    if _gf.generics.len > 1:
+                                        self.ensure_mono_func_n(gfunc_n, gfunc_t.split("_"))
+                                    else:
+                                        self.ensure_mono_func(gfunc_n, gfunc_t)
                         else:
                             # Inference call (no explicit [T]): specialize before the
                             # mono buffer is flushed so the copy + prototype exist.
                             mut _sit = self.infer_generic_targ(mn, args)
                             if _sit != "": self.ensure_mono_func(mn, _sit)
+                            elif self.functions.contains(mn):
+                                mut _sit_m = self.infer_generic_targs_multi(mn, args)
+                                if _sit_m.len > 0: self.ensure_mono_func_n(mn, _sit_m)
                     case _: pass
             case HirExpr.EMethodCall(obj, mmeth, margs, _):
                 self.scan_mono_expr(obj)
@@ -8460,15 +9035,35 @@ pub class CGenerator:
                     self.scan_mono_expr(margs.get(ei2))
                     ei2 = ei2 + 1
                 # Generic-method call: specialize before the mono buffer is flushed.
+                # Guarded the same way as the call-site dispatch above: only for a
+                # method's OWN `[T]` on an otherwise non-generic class -- an
+                # already-generic class's method repeating the class's own `[T]` is
+                # covered by class-level monomorphization already.
                 mut _rcn = hir_expr_type(obj).name
                 if self.classes.contains(_rcn):
-                    mut _mt = self.infer_method_targ(_rcn, mmeth, margs)
-                    if _mt != "": self.ensure_mono_method(_rcn, mmeth, _mt)
+                    mut _rcn_cls = self.classes.get(_rcn)
+                    if _rcn_cls.generics.len == 0:
+                        mut _mt = self.infer_method_targ(_rcn, mmeth, margs)
+                        if _mt != "": self.ensure_mono_method(_rcn, mmeth, _mt)
             case HirExpr.EBinOp(_, bl, br, _):
                 self.scan_mono_expr(bl)
                 self.scan_mono_expr(br)
             case HirExpr.EUnaryOp(_, ue, _):
                 self.scan_mono_expr(ue)
+            # `await generic_fn[T](...)`/`await obj.generic_method[T](...)`: without
+            # this case, this whole pre-pass (which finds every generic call site
+            # needing monomorphization and calls ensure_mono_func/ensure_mono_method
+            # for it) never looks INSIDE an awaited expression at all, so a generic
+            # function/method called only through `await` never gets its
+            # monomorphized body generated anywhere -- confirmed directly: the
+            # thread-entry wrapper `prescan_awaits` generates for it
+            # (`_tr_async_wrap_f__MONO_T`) calls `f__MONO_T` by name, an implicit,
+            # undeclared-function reference, since that function was never emitted
+            # in the first place (this is NOT an emission-ORDER bug like the
+            # interface-wrap one above -- the monomorphized body is missing
+            # entirely, not just misplaced).
+            case HirExpr.EAwait(aw_inner, _):
+                self.scan_mono_expr(aw_inner)
             case _: pass
 
     pub def scan_mono_stmt(self, s_ptr: Pointer[HirStmt]):
@@ -8701,10 +9296,23 @@ pub class CGenerator:
             i = i + 1
         self.w("\n")
 
-        # -- Spawn + async wrappers (static thread-entry functions) --
-        self.prescan_spawns(prog)
-        self.prescan_awaits(prog)
-        self.w("\n")
+        # Spawn + async wrappers used to also be prescanned here, before any
+        # monomorphized generic function exists -- an `await` call to an
+        # EXPLICIT-type-args generic function (`await get_value[Foo](foo)`)
+        # generates a wrapper NAMED for that monomorphization
+        # (`_tr_async_wrap_get_value__MONO_Foo`) that calls the mono'd
+        # implementation directly by name; at this point in generation that
+        # implementation doesn't exist yet (it's emitted later, alongside
+        # every other monomorphized generic function body), an implicit,
+        # wrongly-typed declaration -- a real compile error, confirmed
+        # directly with a minimal, single-file, non-generic-bound repro
+        # (`async def get_value[T](f: T) -> int`, no interfaces or classes
+        # involved at all). The later prescan_spawns/prescan_awaits call
+        # below (after monomorphized bodies AND interface wraps, both of
+        # which an awaited call can also need) covers this and every
+        # non-generic case identically -- removed here rather than
+        # duplicated, since scanning is a pure, side-effect-free pass over
+        # `prog` (safe to run once, wherever it can see everything it needs).
 
         # -- Method implementations -----------------------------------
         i = 0
@@ -8766,6 +9374,17 @@ pub class CGenerator:
             i = i + 1
 
         # -- Free-standing function implementations -------------------
+        # A freestanding target (--freestanding, TAURARO_KERNEL) has no libc
+        # _start/main calling into the program -- a `pub export def` is called
+        # DIRECTLY by an external host (a zig UEFI stub, a JS wasm host), so
+        # `main()`'s own top-level-statement loop below (which runs global
+        # initializers) never executes. Without this, every module-level
+        # `mut x = ...` keeps its zeroed BSS value forever: silently wrong for
+        # a non-zero scalar default, a null-pointer crash for a class instance
+        # (see bugs.txt #1). One shared, run-once guard covers every exported
+        # function regardless of which one the host happens to call first.
+        if self.tier_define == "TAURARO_KERNEL":
+            self.w("static int _tr_export_globals_done = 0;\n")
         i = 0
         while i < prog.functions.len:
             mut f = prog.functions.get(i)
@@ -8795,6 +9414,11 @@ pub class CGenerator:
                     self.shared_vars = Map[str, str].init(8)
                     self.seed_params(f)
                     self.w(self.get_inline_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
+                    if f.is_export and self.tier_define == "TAURARO_KERNEL":
+                        self.w("    if (!_tr_export_globals_done) {\n")
+                        self.w("        _tr_export_globals_done = 1;\n")
+                        self.emit_global_inits(prog)
+                        self.w("    }\n")
                     self.gen_func_body(f.body, 1)
                     self.w("}\n\n")
                     self.cur_func  = ""
@@ -8804,8 +9428,12 @@ pub class CGenerator:
 
         # -- C main entry point ---------------------------------------
         self.emit_entry_glue(prog)
-        self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
-        self.w("    _tr_argc = argc; _tr_argv = argv;\n")
+        self.w("__attribute__((hot)) int main(int _tr_c_argc, char** _tr_c_argv) {\n")
+        # C-level params renamed to _tr_c_argc/_tr_c_argv (from plain argc/argv)
+        # so a Tauraro `main()` that declares its own local named argc/argv
+        # (a natural name to pick when reading OS.args()) does not collide
+        # with this function's own C parameters in the same scope.
+        self.w("    _tr_argc = _tr_c_argc; _tr_argv = _tr_c_argv;\n")
         self.w("    _tr_init_console();\n")
         # NOTE: the global async pool is created LAZILY on first use (see
         # _tr_async_pool() in the runtime). Eagerly spawning one worker thread
@@ -8822,10 +9450,11 @@ pub class CGenerator:
                 main_args_name = mf.params.get(0).name
             mi2 = mi2 + 1
         if main_has_args:
-            # Rename to avoid shadowing C's char** argv parameter
-            if main_args_name == "argv": main_args_name = "_tr_main_argv"
+            # No rename needed: the C main() itself now takes _tr_c_argc/
+            # _tr_c_argv (not argc/argv), so a Tauraro `main(argv: List[str])`
+            # parameter no longer collides with anything in main's own C scope.
             self.w("    List_TrStr* " + main_args_name + " = List_TrStr_new();\n")
-            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(argv[_ai])); }\n")
+            self.w("    for (int _ai = 0; _ai < _tr_c_argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(_tr_c_argv[_ai])); }\n")
 
         # Call top-level statements. A hoisted global var (declared at file scope
         # at file scope) is initialized here with an assignment, not re-declared.
@@ -9108,6 +9737,35 @@ pub class CGenerator:
             i = i + 1
         out.append("\n")
 
+        # -- Interface vtable wrap functions (static inline, after CLASS METHOD
+        # prototypes -- emitted above, well before this point -- but BEFORE
+        # monomorphized generic free-function bodies just below, which may
+        # need to call a wrap function directly (boxing a monomorphized
+        # generic-typed argument into an interface a `def(SomeInterface)->R`
+        # callee expects -- see gen_call's indirect-call-through-a-def-value
+        # branch). Reordered from after the mono bodies: a mono body calling
+        # `Square_as_Shape(...)` before this block ran emitted an implicit,
+        # wrongly-typed declaration ("previous implicit declaration ... with
+        # type int()"), a real compile error, confirmed directly.
+        mut wi = 0
+        while wi < prog.classes.len:
+            mut wcls = prog.classes.get(wi)
+            if not _is_invalid_ptr(wcls as usize):
+                if wcls.generics.len == 0 and wcls.iface_names as usize != 0 as usize and not _is_invalid_ptr(wcls.iface_names as usize):
+                    mut wii = 0
+                    while wii < wcls.iface_names.len:
+                        mut wiface_name = wcls.iface_names.get(wii)
+                        if self.interfaces.contains(wiface_name):
+                            mut wiface = self.interfaces.get(wiface_name)
+                            if not _is_invalid_ptr(wiface as usize):
+                                mut wtargs = Vec[Pointer[AstType]].init(0)
+                                if wcls.iface_targs as usize != 0 as usize and not _is_invalid_ptr(wcls.iface_targs as usize) and wii < wcls.iface_targs.len:
+                                    wtargs = wcls.iface_targs.get(wii).read().args
+                                out.append(self.gen_one_iface_wrap(wcls.name, wiface, wtargs))
+                                out.append("\n")
+                        wii = wii + 1
+            wi = wi + 1
+
         # -- Monomorphized generic FREE-function bodies (after all prototypes, so their
         # calls to other user functions resolve; static, so shared-header inclusion in
         # every TU is duplicate-safe). Their prototypes were emitted early in mono_buf.
@@ -9123,23 +9781,6 @@ pub class CGenerator:
         if sw_out != "":
             out.append(sw_out)
             out.append("\n")
-
-        # -- Interface vtable wrap functions (static inline, after prototypes) -
-        mut wi = 0
-        while wi < prog.classes.len:
-            mut wcls = prog.classes.get(wi)
-            if not _is_invalid_ptr(wcls as usize):
-                if wcls.generics.len == 0 and wcls.iface_names as usize != 0 as usize and not _is_invalid_ptr(wcls.iface_names as usize):
-                    mut wii = 0
-                    while wii < wcls.iface_names.len:
-                        mut wiface_name = wcls.iface_names.get(wii)
-                        if self.interfaces.contains(wiface_name):
-                            mut wiface = self.interfaces.get(wiface_name)
-                            if not _is_invalid_ptr(wiface as usize):
-                                out.append(self.gen_one_iface_wrap(wcls.name, wiface))
-                                out.append("\n")
-                        wii = wii + 1
-            wi = wi + 1
 
         # -- Module-level `mut`/`let` globals: extern declarations -------------
         # Definitions (with initializers, run in main()) are emitted by
@@ -9341,6 +9982,7 @@ pub class CGenerator:
                         self.emitted_fns.insert("i_" + c.name + "_" + m.name, true)
                         self.cur_class = c.name
                         self.cur_func  = m.name
+                        self.cur_throws_ty = m.throws_ty.name
                         self.decl_vars = Map[str, bool].init(64)
                         self.str_local_names = Map[str, bool].init(16)
                         self.coll_local_sfx = Map[str, str].init(16)
@@ -9355,6 +9997,7 @@ pub class CGenerator:
                         self.w("}\n\n")
                         self.cur_class = ""
                         self.cur_func  = ""
+                        self.cur_throws_ty = ""
                         mi = mi + 1
             i = i + 1
         i = 0
@@ -9368,6 +10011,7 @@ pub class CGenerator:
                         mut m = e.methods.get(mi)
                         self.cur_class = e.name
                         self.cur_func  = m.name
+                        self.cur_throws_ty = m.throws_ty.name
                         self.decl_vars = Map[str, bool].init(64)
                         self.str_local_names = Map[str, bool].init(16)
                         self.coll_local_sfx = Map[str, str].init(16)
@@ -9380,6 +10024,7 @@ pub class CGenerator:
                         self.w("}\n\n")
                         self.cur_class = ""
                         self.cur_func  = ""
+                        self.cur_throws_ty = ""
                         mi = mi + 1
             i = i + 1
 
@@ -9405,6 +10050,7 @@ pub class CGenerator:
                         self.emitted_fns.insert(em_key, true)
                         self.cur_func  = f.name
                         self.cur_class = f.class_name
+                        self.cur_throws_ty = f.throws_ty.name
                         self.decl_vars = Map[str, bool].init(64)
                         self.str_local_names = Map[str, bool].init(16)
                         self.coll_local_sfx = Map[str, str].init(16)
@@ -9419,6 +10065,7 @@ pub class CGenerator:
                         self.w("}\n\n")
                         self.cur_func  = ""
                         self.cur_class = ""
+                        self.cur_throws_ty = ""
             i = i + 1
 
         self.flush_closures()
@@ -9566,6 +10213,14 @@ pub class CGenerator:
                 gvi2 = gvi2 + 1
 
         # Main-module free-standing function implementations
+        # See the sibling loop in generate()'s copy of this same shape for the
+        # full rationale (bugs.txt #1): a freestanding `pub export def` is
+        # called directly by an external host, so main()'s own top-level-
+        # statement pass below (which runs global initializers) never
+        # executes for it. One shared, run-once guard, triggered from
+        # whichever exported function the host happens to call first.
+        if self.tier_define == "TAURARO_KERNEL":
+            self.w("static int _tr_export_globals_done = 0;\n")
         i = 0
         if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.functions as usize):
             while i < prog.functions.len:
@@ -9600,6 +10255,11 @@ pub class CGenerator:
                                 self.seed_params(f)
                                 self.cur_self_is_ptr = f.class_name != "" and self.value_types.contains(f.class_name) and self.vt_method_mutates_self(f)
                                 self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
+                                if f.is_export and self.tier_define == "TAURARO_KERNEL":
+                                    self.w("    if (!_tr_export_globals_done) {\n")
+                                    self.w("        _tr_export_globals_done = 1;\n")
+                                    self.emit_global_inits(prog)
+                                    self.w("    }\n")
                                 self.gen_func_body(f.body, 1)
                                 self.cur_self_is_ptr = false
                                 self.w("}\n\n")
@@ -9610,8 +10270,12 @@ pub class CGenerator:
 
         # C main() entry point
         self.emit_entry_glue(prog)
-        self.w("__attribute__((hot)) int main(int argc, char** argv) {\n")
-        self.w("    _tr_argc = argc; _tr_argv = argv;\n")
+        self.w("__attribute__((hot)) int main(int _tr_c_argc, char** _tr_c_argv) {\n")
+        # C-level params renamed to _tr_c_argc/_tr_c_argv (from plain argc/argv)
+        # so a Tauraro `main()` that declares its own local named argc/argv
+        # (a natural name to pick when reading OS.args()) does not collide
+        # with this function's own C parameters in the same scope.
+        self.w("    _tr_argc = _tr_c_argc; _tr_argv = _tr_c_argv;\n")
         self.w("    _tr_init_console();\n")
         # NOTE: the global async pool is created LAZILY on first use (see
         # _tr_async_pool() in the runtime). Eagerly spawning one worker thread
@@ -9629,10 +10293,11 @@ pub class CGenerator:
                         main_args_name = mf.params.get(0).name
                 mi2 = mi2 + 1
         if main_has_args:
-            # Rename to avoid shadowing C's char** argv parameter
-            if main_args_name == "argv": main_args_name = "_tr_main_argv"
+            # No rename needed: the C main() itself now takes _tr_c_argc/
+            # _tr_c_argv (not argc/argv), so a Tauraro `main(argv: List[str])`
+            # parameter no longer collides with anything in main's own C scope.
             self.w("    List_TrStr* " + main_args_name + " = List_TrStr_new();\n")
-            self.w("    for (int _ai = 0; _ai < argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(argv[_ai])); }\n")
+            self.w("    for (int _ai = 0; _ai < _tr_c_argc; _ai++) { List_TrStr_append(" + main_args_name + ", _tr_str_lit(_tr_c_argv[_ai])); }\n")
 
         i = 0
         if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.top_level_stmts as usize):

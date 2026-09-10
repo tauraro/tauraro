@@ -423,5 +423,8 @@ These are accurate as of the current `taupkg` source — not aspirational:
 
 See [15 — Modules](../lang/15_modules.md) for the underlying module
 resolution rules that make vendored dependencies and `TAURARO_PATH` work.
+Packaging a library that wraps an existing C/C++ library (vendored source or
+a system-installed one), with zero manual linking for consumers, is its own
+guide: [10 — Wrapping C/C++ Libraries](10_wrapping_c_cpp_libraries.md).
 
 Previous: [Codegen Guide ←](04_codegen_guide.md) · Next: [Best Practices & Pitfalls →](06_best_practices_pitfalls.md)

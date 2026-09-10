@@ -352,7 +352,16 @@ pub class Lexer:
                 elif esc == 39:     sb.append_char(39)
                 elif esc == 34:     sb.append_char(34)
                 elif esc == 48:     sb.append_char(0)
-                else: sb.append_char(esc)
+                else:
+                    # Unrecognized escape (e.g. `\U`, `\H` — not one of the
+                    # forms above): keep the backslash literally instead of
+                    # silently dropping it. The old behavior consumed both
+                    # characters and emitted only the one after the
+                    # backslash, so `"C:\Users\Home"` silently became
+                    # `"C:UsersHome"` with no diagnostic and no length
+                    # mismatch a caller could detect short of counting bytes.
+                    sb.append_char(92)
+                    sb.append_char(esc)
             else:
                 sb.append_char(c)
         if not self.at_end(): self.advance()
@@ -419,7 +428,16 @@ pub class Lexer:
                 elif esc == 39:     sb.append_char(39)
                 elif esc == 34:     sb.append_char(34)
                 elif esc == 48:     sb.append_char(0)
-                else: sb.append_char(esc)
+                else:
+                    # Unrecognized escape (e.g. `\U`, `\H` — not one of the
+                    # forms above): keep the backslash literally instead of
+                    # silently dropping it. The old behavior consumed both
+                    # characters and emitted only the one after the
+                    # backslash, so `"C:\Users\Home"` silently became
+                    # `"C:UsersHome"` with no diagnostic and no length
+                    # mismatch a caller could detect short of counting bytes.
+                    sb.append_char(92)
+                    sb.append_char(esc)
             else:
                 sb.append_char(c)
         if not self.at_end(): self.advance()

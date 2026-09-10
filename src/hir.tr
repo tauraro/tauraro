@@ -4,7 +4,7 @@
 from core.vec import Vec
 from core.alloc import alloc, dealloc
 from core.string import StringObj
-from ast import AstType, Decorator, Pattern, Ownership
+from ast import AstType, Decorator, Pattern, Ownership, GenericConstraint
 
 # --- Expressions --------------------------------------------------------------
 
@@ -162,6 +162,7 @@ pub class HirFunction:
     pub name: str
     pub class_name: str              # set when this is a class/enum method
     pub generics: Vec[str]
+    pub constraints: Vec[GenericConstraint]  # `[T: Iface]` bounds, see FunctionDef.constraints
     pub params: Vec[HirParam]
     pub ret_ty: AstType
     pub throws_ty: AstType           # non-empty name = function throws
@@ -198,6 +199,7 @@ pub class HirClass:
     pub generics: Vec[str]
     pub base_classes: Vec[str]
     pub iface_names: Vec[str]
+    pub iface_targs: Vec[Pointer[AstType]]  # parallel to iface_names, see ClassDef.iface_targs
     pub fields: Vec[HirField]
     pub methods: Vec[HirFunction]
     pub decorators: Vec[Decorator]
