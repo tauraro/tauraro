@@ -1009,6 +1009,25 @@ pub class CGenerator:
         self.struct_buf  = self.mono_buf
         self.proto_buf   = self.mono_buf
 
+        # Pre-resolve every field's C type BEFORE writing this struct's own
+        # typedef. A field whose type is itself a not-yet-monomorphized
+        # generic class (e.g. Session[T,C,RS]'s `engine: Engine[C,RS]`
+        # field) makes type_to_c call ensure_mono recursively; that nested
+        # call writes through the exact same self.buf/mono_buf redirect
+        # this function just set up, so if it fired mid-way through OUR
+        # OWN field loop, the nested struct's entire typedef+prototypes
+        # landed spliced into the middle of our still-open `{ ... }` body
+        # -- a real, confirmed corruption (Engine's and Mapper's full
+        # struct text appearing between two of Session's field lines).
+        # Resolving all field types first means any such nested emission
+        # completes and lands in mono_buf BEFORE this struct's own text
+        # starts, so the two are sequential, never interleaved.
+        mut _fld_c_tys = Vec[str].init(cls.fields.len)
+        mut _fpi = 0
+        while _fpi < cls.fields.len:
+            _fld_c_tys.push(self.type_to_c(cls.fields.get(_fpi).ty))
+            _fpi = _fpi + 1
+
         # Forward declaration
         self.w("typedef struct " + mono_name + " " + mono_name + ";\n")
 
@@ -1022,7 +1041,7 @@ pub class CGenerator:
         mut fi = 0
         while fi < cls.fields.len:
             mut f = cls.fields.get(fi)
-            self.w("    " + self.type_to_c(f.ty) + " " + f.name + ";\n")
+            self.w("    " + _fld_c_tys.get(fi) + " " + f.name + ";\n")
             fi = fi + 1
         if cls.fields.len == 0 and _mono_vt:
             self.w("    char _pad;\n")
