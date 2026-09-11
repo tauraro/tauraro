@@ -5162,7 +5162,30 @@ extend Sema:
                                     # -> str, not Cat).
                                     match idx.read():
                                         case Expr.EIdent(farg_c):
+                                            # Look up the function's OWN declared return type and
+                                            # substitute its generic param with the explicit type
+                                            # arg -- mirrors the multi-type-arg ETuple case just
+                                            # below, which already does this correctly. This used
+                                            # to just blindly set ret_ty to the type ARGUMENT
+                                            # itself (farg_c), which is only right when the
+                                            # declared return type genuinely IS the function's own
+                                            # generic param (`-> T`); for any other declared return
+                                            # type (`get_value[T](f: T) -> int`, always int
+                                            # regardless of T) it silently inferred the wrong
+                                            # call-site type -- confirmed directly with a
+                                            # tauorm-unrelated repro: `mut r = get_value[Foo](foo)`
+                                            # inferred `r: Foo` (an immediate, loud compile error
+                                            # in the sync case; a silent void*-boxing type mismatch
+                                            # -- printing a pointer's description instead of 99 --
+                                            # when the same call happened through `await`, since
+                                            # async's boxing hides the mistyped value instead of
+                                            # rejecting it at compile time).
                                             mut fret = AstType.init(farg_c)
+                                            if self.fn_defs.contains(gn):
+                                                mut _sf_fd = self.fn_defs.get(gn)
+                                                if _sf_fd.ret_ty as usize != 0 as usize: fret = _sf_fd.ret_ty.read()
+                                                if _sf_fd.generics.len > 0 and _sf_fd.generics.get(0) == fret.name:
+                                                    fret = AstType.init(farg_c)
                                             ret_ty = fret
                                             hcallee = box_hirexpr(HirExpr.EIdent(gn + "__MONO_" + farg_c, fret, false))
                                         case Expr.ETuple(ftargs):

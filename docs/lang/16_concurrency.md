@@ -84,6 +84,30 @@ Rules:
 - A non-async `def` can call `async def` without `await` — treated as a normal call
 - `await` on a non-async function is a no-op pass-through
 
+### Async methods
+
+`async def` works on class methods too, not just free functions — declare it the same way inside an `extend` block:
+
+```python
+class Fetcher:
+    pub base_url: str
+
+extend Fetcher:
+    pub async def fetch(self, id: int) -> str:
+        return f"{self.base_url}/{id}"
+
+    pub async def fetch_two(self, a: int, b: int) -> str:
+        mut r1 = await self.fetch(a)
+        mut r2 = await self.fetch(b)
+        return r1 + "," + r2
+
+async def main():
+    mut f = Fetcher()
+    f.base_url = "https://api.example.com"
+    mut result = await f.fetch_two(1, 2)
+    print(result)
+```
+
 ### Common Mistakes
 
 **Mistake: using sequential `await` when you wanted parallel execution.**

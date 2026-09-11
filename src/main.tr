@@ -20,7 +20,7 @@ from codegen.llvm import LlvmGenerator
 from codegen.native import NativeGenerator
 from codegen.gpu import GpuGenerator
 from mir import lower_program, dump_mir
-from macros import expand_macros
+from macros import expand_macros_tracked
 from hir import HirProgram
 
 extern "C":
@@ -105,8 +105,9 @@ pub def print_usage():
     print("                      macos-arm64, macos-x86_64")
     print("                      embedded-arm, embedded-arm64, embedded-riscv32, embedded-riscv64")
     print("                      uefi-x64 (turnkey .efi; pair with --freestanding, no --emit-ld)")
-    print("                      wasm, wasm-wasi")
+    print("                      wasm (turnkey .wasm; pair with --freestanding), wasm-wasi")
     print("                    Or pass a raw LLVM triple (e.g. aarch64-linux-gnu)")
+    print("  --wasm-memory <MB> Initial linear memory for a --target wasm turnkey link (default 64)")
     print("  --sysroot <path>  Override sysroot for the cross-compiler")
     print("  --debug           Compile with ASAN and bounds-check assertions")
     print("  --strict          Treat alloc/dealloc outside 'unsafe:' as a hard error [U-1]")
@@ -669,6 +670,24 @@ pub def out_is_windows(target: str, triple: str) -> bool:
     if target == "": return _tr_is_windows()
     return _tr_str_contains(triple, "windows") or _tr_str_contains(triple, "mingw")
 
+# Parse a decimal integer CLI argument (digits only, no sign). Returns
+# `fallback` on empty/malformed input so a typo'd numeric flag (e.g.
+# --wasm-memory abc) falls back to a safe default instead of silently
+# becoming 0 (a zero-byte initial linear memory would break the wasm
+# module's very first allocation).
+pub def parse_uint_arg(s: str, fallback: int) -> int:
+    mut p = s as Pointer[char]
+    mut i = 0
+    mut result = 0
+    mut c = p.offset(0).read() as int
+    if c == 0: return fallback
+    while c != 0:
+        if c < 48 or c > 57: return fallback
+        result = result * 10 + (c - 48)
+        i = i + 1
+        c = p.offset(i).read() as int
+    return result
+
 # Length of a NUL-terminated string.
 pub def str_len_of(s: str) -> int:
     mut p = s as Pointer[char]
@@ -1200,6 +1219,81 @@ pub def compile_all_c_incremental(c_files: Vec[str], needs: Vec[bool], exe_path:
     if verbose: print("  [LINK] " + cmd)
     return _tr_system(cmd)
 
+# Incremental wasm32-freestanding compile + link (`--target wasm`, browser/JS-
+# embeddable modules). Kept SEPARATE from compile_all_c_incremental rather than
+# folded into its generic hosted-link branch, for two reasons found while
+# diagnosing nebula's wasm build taking an hour+ and timing out:
+#
+#   1. A freestanding wasm module needs wasm-ld's own flag surface (--no-entry,
+#      --export-dynamic, --allow-undefined, --initial-memory) instead of a
+#      hosted executable's (-lm, -mconsole, entry-point CRT startup) — the
+#      generic branch's link line is simply the wrong shape for this target.
+#
+#   2. The obvious way to get those flags is `zig build-exe`'s own high-level
+#      surface (-fno-entry/-rdynamic/--import-symbols/...), which is what a
+#      hand-rolled build script naturally reaches for. But `zig build-exe` re-
+#      runs zig's OWN build pipeline over every input C file on every
+#      invocation (measured at 8.8GB peak RSS linking ~30 generated files for
+#      nebula's toolkit) and has no notion of reusing a previous build's
+#      objects — every build is fully cold. Per-TU `zig cc -c` (cheap, and
+#      already the exact compiler compile_all_c_incremental uses for every
+#      other cross target) followed by a DIRECT `zig wasm-ld` link (the raw
+#      linker, no whole-program driver pass) produces the identical output
+#      through a far cheaper, genuinely cacheable path: unchanged .c -> .o is
+#      reused exactly like the native incremental path (needs[i]==false and
+#      the .o already exists), so a typical single-file edit only re-runs
+#      LLVM on that one file, not the whole toolkit.
+pub def compile_wasm_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: str, inc_dir: str,
+                      opt_level: str, verbose: bool, memory_mb: int) -> int:
+    mut cc = "zig cc -target wasm32-freestanding"
+    mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality"
+    # Same target_extra_flags("wasm32-unknown-unknown") flags the generic cross
+    # path would apply, inlined here since this function bypasses that path.
+    mut wasm_flags = " -nostdlib --no-standard-libraries -DTAURARO_WASM=1 -DTAURARO_NO_OS=1"
+    mut common = " -O" + opt_level + wasm_flags + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\""
+
+    # -- 1. Compile each changed module to its .o (cache reused across builds) --
+    mut o_files = Vec[str].init(c_files.len)
+    mut i = 0
+    mut reused = 0
+    while i < c_files.len:
+        mut cpath = c_files.get(i)
+        mut opath = obj_path_for(cpath)
+        o_files.push(opath)
+        if needs.get(i) or not file_exists(opath):
+            mut ccmd = cc + common + " -c \"" + cpath + "\" -o \"" + opath + "\""
+            if verbose: print("  [CC -c wasm] " + cpath)
+            mut crc = _tr_system(ccmd)
+            if crc != 0:
+                print(c_red("error") + ": compiling " + cpath + " failed (exit code " + str(crc) + ")")
+                return crc
+        else:
+            reused = reused + 1
+        i = i + 1
+    if verbose: print("  [incremental] reused " + str(reused) + " of " + str(c_files.len) + " cached wasm object(s)")
+
+    # -- 2. Link all .o directly with wasm-ld (no zig build-exe whole-program pass) --
+    # --no-entry: freestanding module, not a WASI command (no _start required).
+    # --export-dynamic: every `pub export def` stays visible to the host JS
+    #   instead of wasm-ld stripping it as unreferenced (was -rdynamic).
+    # --allow-undefined: an `extern "C"` decl with no Tauraro-side body becomes
+    #   a real WASM host import instead of a link error (was --import-symbols) —
+    #   a no-op for a build with no such decls, so always-on is harmless.
+    # --export=__heap_base: the program's own @allocator needs this to find the
+    #   start of free linear memory.
+    # --gc-sections: cross-TU dead code stripping at the linker (cheap, a
+    #   standard linker pass) instead of zig build-exe's LLVM-level whole-
+    #   program size optimizer — this is most of where the 8.8GB/hour+ went.
+    mut bytes = memory_mb * 1024 * 1024
+    mut cmd = "zig wasm-ld --no-entry --export-dynamic --allow-undefined --export=__heap_base --gc-sections"
+    cmd = cmd + " -z stack-size=1048576 --initial-memory=" + str(bytes) + " --build-id=none -o \"" + exe_path + "\""
+    i = 0
+    while i < o_files.len:
+        cmd = cmd + " \"" + o_files.get(i) + "\""
+        i = i + 1
+    if verbose: print("  [LINK wasm-ld] " + cmd)
+    return _tr_system(cmd)
+
 pub def compile_c_to_exe(c_path: str, exe_path: str, opt_level: str, verbose: bool) -> int:
     mut cc = detect_c_compiler()
     mut opt_flag = "-O" + opt_level
@@ -1453,6 +1547,7 @@ pub def main(args: Vec[str]):
     mut lib_mode    = false              # --lib           : build a shared library (.so/.dll) of `export def`s + a header
     mut no_auto_cpp = false              # --no-auto-cpp    : don't auto-compile/link bindgen C++ shims (link them manually with --link)
     mut export_cpp  = false              # --export-cpp     : also emit an ergonomic C++ header (call Tauraro from C++); implies --lib
+    mut wasm_memory_mb = 64              # --wasm-memory <MB>: initial linear memory for a --target wasm turnkey link
 
     # `tauraroc lint <file>` runs resolution + semantic analysis and reports
     # warnings/errors without producing an executable (like --check, but framed
@@ -1526,6 +1621,9 @@ pub def main(args: Vec[str]):
             lib_mode = true              # a C++ header is only useful with a linkable library
         elif arg == "--no-heap":
             no_heap = true                   # [H-1] reject heap-allocating types (str-alloc/List/Dict/Set/heap class)
+        elif arg == "--wasm-memory" and i + 1 < args.len:
+            i = i + 1
+            wasm_memory_mb = parse_uint_arg(args.get(i), 64)
         elif arg == "--freestanding":
             tier_define = "TAURARO_KERNEL"   # bare-metal core tier: no libc, pluggable allocator
         elif arg == "--no-std":
@@ -1586,7 +1684,7 @@ pub def main(args: Vec[str]):
     # targets, splice the generated decls into the program, and drop the macro
     # defs — all BEFORE sema, so generated code is type/borrow-checked normally
     # and macro bodies (which use the `item` reflection) never reach sema.
-    mut macro_errs = expand_macros(prog)
+    mut macro_errs = expand_macros_tracked(prog, resolver.all_decls, resolver.all_decl_modules)
     if macro_errs > 0:
         print(c_red("error") + ": " + macro_errs.to_str() + " macro error(s); aborting compilation.")
         _tr_exit(1)
@@ -2102,8 +2200,11 @@ pub def main(args: Vec[str]):
     elif target != "" and _tr_str_contains(tgt_triple, "wasm"):
         exe_ext = ".wasm"
     # exe_name already carries the resolved directory (CWD / -d dir / -o path),
-    # so the artifact path is just the stem + platform extension.
-    mut exe_path = exe_name + exe_ext
+    # so the artifact path is just the stem + platform extension. ensure_ext
+    # (not a blind concat) so an explicit `-o foo.wasm`/`-o foo.so` that
+    # already carries the target's own extension isn't doubled -- the same
+    # class of bug the UEFI turnkey link hit and fixed for `-o BOOTX64.EFI`.
+    mut exe_path = ensure_ext(exe_name, exe_ext)
 
     # --lib: emit a C header declaring the `export def` functions, next to the
     # library, so C/Rust/etc. consumers can link against it.
@@ -2296,7 +2397,19 @@ pub def main(args: Vec[str]):
     # Incremental compile + link: per-module .o with cache reuse for
     # unchanged modules, then a single link. build/ is intentionally kept
     # populated (.c + .o + headers) so the next build can reuse cached objects.
-    mut rc = compile_all_c_incremental(all_c_files, needs_recompile, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode, lib_mode, has_cpp, use_lto)
+    #
+    # `--target wasm` (wasm32-unknown-unknown, freestanding/browser) gets its
+    # OWN turnkey link path instead of the generic hosted-link branch above:
+    # see compile_wasm_incremental's own comment for why (wrong link-flag
+    # shape + zig build-exe's non-incremental, memory-hungry whole-program
+    # pass measured at 8.8GB/hour+ on nebula's toolkit). wasm32-wasi is a
+    # normal hosted-style target (real _start via wasi-libc) and keeps using
+    # the generic branch unchanged.
+    mut rc = 0
+    if not lib_mode and _tr_str_contains(tgt_triple, "wasm32-unknown-unknown"):
+        rc = compile_wasm_incremental(all_c_files, needs_recompile, exe_path, build_dir, opt_level, verbose, wasm_memory_mb)
+    else:
+        rc = compile_all_c_incremental(all_c_files, needs_recompile, exe_path, build_dir, link_paths, lib_flags, opt_level, verbose, static_link, target, sysroot, debug_mode, lib_mode, has_cpp, use_lto)
     if rc != 0:
         print(c_red("error") + ": compilation failed (exit code " + str(rc) + ")")
         _tr_exit(rc)

@@ -181,6 +181,84 @@ added here as each phase lands.
   parameter (`too few arguments to function`). Defaulted to `16`
   (`src/codegen/c.tr`), matching the identical no-arg default `Set[T].init()`
   already had two branches above it in the same function.
+- **`await` on a `throws`-declared function tried to cast a `Result` struct
+  to/from a scalar integer** (`aggregate value used where an integer was
+  expected` / `conversion to non-scalar type requested`), since a `Result`/
+  `Option`/`Tuple` return value is an aggregate, not a pointer- or
+  integer-sized scalar, and the generic `void*`-channel the coroutine
+  wrapper uses to pass a task's result back assumed the latter.
+  `emit_async_wrapper_for_call` and `gen_await_call` (`src/codegen/c.tr`)
+  now heap-allocate room for the struct, copy the return value into it, and
+  hand back the pointer through that same channel, dereferencing and
+  freeing it on the await side — the same pattern every other return type
+  on that channel already used.
+- **`fname[T](args)` (a single explicit type argument) never looked up the
+  called function's actual declared return type**, instead blindly setting
+  the call's result type to the type ARGUMENT itself — correct only when
+  the function's return type genuinely is its own generic parameter
+  (`id[T](x: T) -> T`), and silently wrong for anything else
+  (`get_value[T](f: T) -> int`, always `int` regardless of `T`): a plain
+  sync call like `get_value[Foo](foo)` mis-inferred `Foo` as the result
+  type (an immediate, loud C compile error), while the same call reached
+  through `await` corrupted the value silently instead (the mismatch never
+  surfaced as a type error, since the coroutine result channel is an
+  untyped `void*`). The multi-type-argument sibling case
+  (`fname[T1,T2](args)`) already resolved this correctly; the single-arg
+  case in `sema.tr`'s generic free-function call handling just never had
+  the matching logic. Fixed by looking up the function's declared return
+  type and only substituting the explicit type argument when it actually
+  matches the function's own (first) generic parameter, mirroring the
+  multi-arg case.
+- **`async def` methods declared inside an `extend` block were not
+  recognized as async at all.** `parse_extend_decl`'s method-parsing loop
+  (`src/parser.tr`) had cases for `KwDef`/`KwPass`/`Dedent|Eof` but none for
+  `KwAsync` — an `async` token there fell into the catch-all
+  `case _: self.pos += 1`, silently discarding it; the method then parsed
+  as an ordinary synchronous method (`is_async` never set on it). This was
+  invisible unless the method's own body called `await` internally, in
+  which case it failed with `[C-4] 'await' used outside an async function`
+  on a method plainly declared `async def`. **Async methods were entirely
+  unsupported before this fix — only async free functions worked.** Fixed
+  by adding a `Token.KwAsync` case mirroring the top-level declaration
+  parser's own handling of the same keyword.
+- **`Map`/`Dict` `.get()` / `.get_or()` / `.set()` / `.free()` checked the
+  raw, un-substituted generic type-PARAMETER name (e.g. literally `"T"`)
+  against the str/float value-type checks instead of resolving it through
+  the active monomorphization substitution first.** Inside a monomorphized
+  method where a field's value type resolves concretely for that
+  instantiation (e.g. `Map[str, T]` with `T=str`), the raw-name check
+  always missed, and `.get()` produced `(TrStr)(uintptr_t)ptr` — casting a
+  pointer directly to a non-scalar STRUCT type (`conversion to non-scalar
+  type requested`). Fixed 4 call sites in `codegen/c.tr` to resolve the
+  value type name via `resolve_generic_prim(...)` first, the same helper
+  the adjacent float-value check at each site already (inconsistently)
+  used. A pre-existing SLet-level compensating recovery for a different,
+  genuinely distinct case — a bare `Dict` annotation with no value-type
+  argument at all (`mut config: Dict = {...}`), which has no type
+  information to resolve in the first place — was updated to use the same
+  resolved check rather than the raw one, so the two mechanisms agree on
+  when unboxing has already happened and a value is never double-unboxed.
+- **A macro-generated plain top-level declaration's function BODY was
+  never emitted into any generated `.c` file**, producing an undefined-
+  reference link error despite `--check` passing cleanly and the
+  prototype being correctly declared and referenced. Root cause:
+  `main.tr` builds the per-module (and main-module) function/class sets
+  used to decide which generated `.c` file's body-emission loop a given
+  declaration belongs to from `resolver.all_decls`/`all_decl_modules`,
+  snapshotted by `resolve_main` **before** `expand_macros` runs; a
+  macro-spliced declaration is appended to the program's declaration list
+  during macro expansion but those resolver-owned bookkeeping lists never
+  learn about it, so it is absent from every module's function set and
+  its body-emission is silently skipped everywhere. Fixed via a new
+  `expand_macros_tracked(prog, all_decls, all_decl_modules)` (`macros.tr`)
+  that pushes each newly-generated declaration into the same resolver
+  lists, attributed to its triggering declaration's own module — sound
+  because `prog.decls[i]` and `resolver.all_decls[i]` are the same
+  pointers in the same order at this pass's entry point (`resolve_main`
+  copies one into the other verbatim), so the loop index doubles as a
+  valid lookup key into `all_decl_modules`. `main.tr` updated to call the
+  tracked variant (the untracked `expand_macros` is kept as a thin
+  wrapper for any other caller).
 
 ### Fixed (build/CI)
 - **The portable-C bootstrap seed (`bootstrap/c/`) was missing the

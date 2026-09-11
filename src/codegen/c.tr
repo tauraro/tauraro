@@ -1617,12 +1617,80 @@ pub class CGenerator:
             i = i + 1
         return fwd + defs
 
-    # Emit the top-level global-initializer statements (assignments to hoisted globals
-    # + any module-scope code) — the SAME logic main() runs inline. Shared so the
-    # @entry reset trampoline initializes globals too: @entry boots past main(), so
-    # without this a non-zero global initializer (mut x: usize = 0x...) stays at its
-    # .bss zero (a silent HardFault). Writes via self.w.
-    pub def emit_global_inits(self, prog: HirProgram):
+    # True if `e` is DEFINITELY non-allocating: a literal, or a cast/unary/binary
+    # combination of already-safe sub-expressions. Deliberately conservative —
+    # ANY call (a class `.init()`, a plain function, a method) or collection
+    # literal (List/Dict/Set/Tuple, even empty — `List_T_new()` still mallocs
+    # the header) is treated as risky, since there is no general way to know
+    # whether an arbitrary callee allocates transitively. Used to split a
+    # module's global initializers into two prologues — see the call site's
+    # own comment (bugs.txt #1 vs the allocator-ordering hazard found in
+    # nebula's ide_demo_web) for why the split exists.
+    pub def is_safe_global_init(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return true
+        match e.read():
+            case HirExpr.ELitInt(_, _): return true
+            case HirExpr.ELitFloat(_, _): return true
+            case HirExpr.ELitBool(_, _): return true
+            case HirExpr.ELitChar(_, _): return true
+            case HirExpr.ELitNone(_): return true
+            case HirExpr.EIdent(_, _, _): return true
+            case HirExpr.ECast(inner, _): return self.is_safe_global_init(inner)
+            case HirExpr.EUnaryOp(_, inner, _): return self.is_safe_global_init(inner)
+            case HirExpr.EBinOp(_, l, r, _): return self.is_safe_global_init(l) and self.is_safe_global_init(r)
+            case _: return false
+
+    # Names of module-level globals that have a real (non-null) initializer
+    # expression, split by is_safe_global_init. Used to decide which exported
+    # function(s) should carry which half of the freestanding first-call-wins
+    # global-init prologue — see that call site's own comment for why
+    # "whichever export runs first, one shared block" is not sound once any
+    # initializer allocates: found via nebula's ide_demo_web hanging at
+    # runtime because `_it = Interpreter.init()` (an allocating global
+    # initializer) ran before the program's own `nebula_heap_init` export had
+    # called its `arena_init(base, size)`. safe_names (literals/casts/ops —
+    # e.g. `mut _next: usize = 0 as usize`) are harmless to run on the FIRST
+    # export call regardless of allocator state, so they keep the original
+    # unconditional-first-call behavior. risky_names (anything that calls a
+    # constructor or builds a collection) are deferred to whichever export's
+    # body actually references one of them — normally the export called AFTER
+    # the allocator-bootstrap one in every nebula example's own convention.
+    pub def global_init_names(self, prog: HirProgram, safe_names: Vec[str], risky_names: Vec[str]):
+        if _is_invalid_ptr(prog as usize): return
+        if _is_invalid_ptr(prog.top_level_stmts as usize): return
+        mut i = 0
+        while i < prog.top_level_stmts.len:
+            match prog.top_level_stmts.get(i).read():
+                case HirStmt.SLet(gn, _, _, _, _, _, gv):
+                    if self.global_vars.contains(gn) and gv as usize != 0 as usize:
+                        if self.is_safe_global_init(gv): safe_names.push(gn)
+                        else: risky_names.push(gn)
+                case _: pass
+            i = i + 1
+
+    # True if `body_text` (a generated C function body) textually mentions any
+    # of `names` — a deliberately cheap substring check (false positives from
+    # an unrelated identifier sharing a suffix are harmless: they only cause
+    # the prologue to be attached to one extra function, never dropped from
+    # the one that needs it).
+    pub def _body_mentions_any(self, body_text: str, names: Vec[str]) -> bool:
+        mut i = 0
+        while i < names.len:
+            if _tr_str_contains(body_text, names.get(i)): return true
+            i = i + 1
+        return false
+
+    # Safe/risky halves of emit_global_inits (see is_safe_global_init/
+    # global_init_names' own comments) — used ONLY at the freestanding
+    # per-export "first call wins" injection sites, so an allocating
+    # initializer can be deferred past an allocator-bootstrap export while a
+    # literal one (harmless at any point) still runs on the true first call.
+    # `filter_safe` selects which half to emit; both share emit_global_inits'
+    # own gen_stmt fallback for non-SLet top-level code (kept in the safe
+    # pass only, matching that code's original unconditional-first-call
+    # behavior — the rare shape isn't part of the allocator-ordering hazard
+    # this split exists for).
+    pub def emit_global_inits_filtered(self, prog: HirProgram, filter_safe: bool):
         if _is_invalid_ptr(prog as usize): return
         if _is_invalid_ptr(prog.top_level_stmts as usize): return
         mut i = 0
@@ -1631,19 +1699,29 @@ pub class CGenerator:
             match prog.top_level_stmts.get(i).read():
                 case HirStmt.SLet(gn, _, _, _, _, _, gv):
                     if self.global_vars.contains(gn):
+                        _tlg = true
+                        mut _is_safe = gv as usize == 0 as usize or self.is_safe_global_init(gv)
                         # File-scope globals are already declared (and zero-initialized
                         # by C static storage). With a value, run the initializer here in
                         # the boot path; without one, the static zero suffices. Either way
                         # never fall through to gen_stmt, which would re-declare (shadow)
                         # the global as a main-local (breaks cross-function globals, e.g.
                         # a `[u8; N]` arena shared with an @allocator).
-                        if gv as usize != 0 as usize:
+                        if gv as usize != 0 as usize and _is_safe == filter_safe:
                             self.w("    " + gn + " = " + self.gen_expr(gv) + ";\n")
-                        _tlg = true
                 case _: pass
-            if not _tlg:
+            if not _tlg and filter_safe:
                 self.gen_stmt(prog.top_level_stmts.get(i), 1)
             i = i + 1
+
+    # Combined (safe + risky) global-init emission — the @entry boot trampoline's
+    # own single, well-defined boot path (unlike a freestanding wasm/UEFI
+    # export, there is no "which export runs first" ambiguity here, so the
+    # safe/risky split's deferral isn't needed; this preserves the original
+    # unconditional-first-call behavior for @entry targets).
+    pub def emit_global_inits(self, prog: HirProgram):
+        self.emit_global_inits_filtered(prog, true)
+        self.emit_global_inits_filtered(prog, false)
 
     # --freestanding @entry: emit a reset trampoline + Cortex-M .isr_vector table so
     # the user's @entry function is the boot entry — no hand-written startup.c. The
@@ -4518,7 +4596,12 @@ pub class CGenerator:
     # independent reference the dict needs.
     pub def dict_val_arg(self, e: Pointer[HirExpr]) -> str:
         mut e_s = self.gen_expr(e)
-        if _is_str_type(hir_expr_type(e).name):
+        # resolve_generic_prim: inside a monomorphized generic method body, a
+        # value expression's raw HIR type may still be the un-substituted
+        # type PARAM name (e.g. "T" for a `Map[str, T]` value being set with
+        # T=str), which _is_str_type alone never matches — same fix as the
+        # float check a few lines below already applies.
+        if _is_str_type(self.resolve_generic_prim(hir_expr_type(e).name)):
             if self._is_fresh_str_expr(e):
                 mut tmp = "_dvt" + self.next_temp()
                 self.wrap_temp_decls.push("TrStr " + tmp + " = (" + e_s + ")")
@@ -6056,23 +6139,39 @@ pub class CGenerator:
             # exactly like `.get` so str values are unboxed.
             if method == "get" or method == "get_index":
                 mut c_ty_c = self.type_to_c(call_ty)
+                # Inside a monomorphized generic method body, call_ty.name may
+                # still be the raw, un-substituted type PARAM name (e.g. "T"
+                # for a `Map[str, T]` field's `.get()` inside `extend
+                # Holder[T,...]`), not the concrete "str"/"float" it resolves
+                # to for THIS instantiation. Checking the raw name against
+                # _is_str_type/_is_float_type below always missed (neither
+                # matches "T"), falling through to the generic-cast branch,
+                # which cast the dict's void* slot DIRECTLY to the (non-
+                # scalar) TrStr/double C type -- "conversion to non-scalar
+                # type requested", confirmed directly with a minimal,
+                # tauorm-unrelated repro (`Holder[T,..]` with a `Map[str,T]`
+                # field, monomorphized with T=str). Resolve through the
+                # active type_subst first, matching how every other
+                # generic-value-in-a-collection site in this file already
+                # does (see gen_tuple_to_str's use of the same helper).
+                mut _get_vty = self.resolve_generic_prim(call_ty.name)
                 if is_idict:
                     mut iget_r = "_tr_idict_get(" + obj_s + ", " + self.gen_args(args) + ")"
-                    if _is_str_type(call_ty.name):
+                    if _is_str_type(_get_vty):
                         if self.eliding_get_retain: return "_tr_str_unbox(" + iget_r + ")"
                         return "_tr_str_retain(_tr_str_unbox(" + iget_r + "))"
                     # Float value (#24): the slot holds the f64 BIT PATTERN — reinterpret,
                     # never arithmetic-cast (that truncated 1.5 -> 1).
-                    if _is_float_type(call_ty.name):
+                    if _is_float_type(_get_vty):
                         return "_tr_ptr_to_f64(" + iget_r + ")"
                     if c_ty_c != "void" and c_ty_c != "":
                         return "((" + c_ty_c + ")(uintptr_t)" + iget_r + ")"
                     return iget_r
                 mut mget_r = "_tr_dict_get(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ")"
-                if _is_str_type(call_ty.name):
+                if _is_str_type(_get_vty):
                     if self.eliding_get_retain: return "_tr_str_unbox(" + mget_r + ")"
                     return "_tr_str_retain(_tr_str_unbox(" + mget_r + "))"
-                if _is_float_type(call_ty.name):
+                if _is_float_type(_get_vty):
                     return "_tr_ptr_to_f64(" + mget_r + ")"
                 if c_ty_c != "void" and c_ty_c != "":
                     return "((" + c_ty_c + ")(uintptr_t)" + mget_r + ")"
@@ -6116,7 +6215,10 @@ pub class CGenerator:
                 return "(_tr_dict_len(" + obj_s + ") == 0LL)"
             # get_or(key, default) - get with fallback
             if method == "get_or" and args.len >= 2:
-                mut _is_str_val = _is_str_type(call_ty.name)
+                # See the "get"/"get_index" branch above: call_ty.name can
+                # still be a raw, un-substituted generic type PARAM name
+                # inside a monomorphized method body.
+                mut _is_str_val = _is_str_type(self.resolve_generic_prim(call_ty.name))
                 mut _d = self.gen_expr(args.get(1))
                 if _is_str_val: _d = "_tr_str_box(" + _d + ")"
                 mut _res = ""
@@ -6137,7 +6239,11 @@ pub class CGenerator:
             # boxes (#54): use the _strval variant to release each boxed
             # TrStr and free its box, avoiding a per-entry leak.
             if method == "free":
-                mut _val_is_str = obj_full_ty.args.len > 1 and _is_str_type(obj_full_ty.args.get(1).read().name)
+                # resolve_generic_prim: obj_full_ty comes from the HIR's
+                # un-substituted declared field type, so a `Map[str, T]`
+                # field's value arg can still read "T" here inside a
+                # monomorphized method body (T=str for THIS instantiation).
+                mut _val_is_str = obj_full_ty.args.len > 1 and _is_str_type(self.resolve_generic_prim(obj_full_ty.args.get(1).read().name))
                 if is_idict:
                     if _val_is_str: return "_tr_idict_free_strval(" + obj_s + ")"
                     return "_tr_idict_free(" + obj_s + ")"
@@ -6564,6 +6670,30 @@ pub class CGenerator:
         elif items.len > 0:
             sfx = self.list_elem_suffix(hir_expr_type(items.get(0)).name)
         mut lsfx = self.list_sfx(sfx)
+        # Plain-old-data element types (no ARC, no per-element retain/heap-box
+        # logic) get built as ONE static C array + a bulk memcpy, instead of one
+        # `List_<T>_append(...)` call per element. Found while diagnosing why a
+        # 22,800-element `List[u8]` font-bitmap literal (toolkit/text/font_data_lg.tr)
+        # took 10+ minutes to compile on EVERY cold build/target, wasm included:
+        # the old shape put 22,800 sequential call expressions in one C statement-
+        # expression, which is roughly quadratic for clang/LLVM to parse+codegen,
+        # AND cost 22,800 individual capacity-checked heap-growing calls at every
+        # runtime startup. A static array initializer is linear for the compiler
+        # to emit (compile-time constant data, no runtime calls at all) and the
+        # memcpy replaces 22,800 function calls with one.
+        mut _pod_ctype = self.pod_list_ctype(lsfx)
+        if _pod_ctype != "" and items.len > 0:
+            mut arr = "_a_" + self.next_temp()
+            mut l = "_l_" + self.next_temp()
+            mut s = "({ " + _pod_ctype + " " + arr + "[] = {"
+            mut i = 0
+            while i < items.len:
+                s = s + self.gen_expr(items.get(i)) + ", "
+                i = i + 1
+            s = s + "}; List_" + lsfx + "* " + l + " = List_" + lsfx + "_new(); "
+            s = s + "List_" + lsfx + "_reserve(" + l + ", " + str(items.len) + "); "
+            s = s + "memcpy(" + l + "->data, " + arr + ", sizeof(" + arr + ")); " + l + "->len = " + str(items.len) + "; "
+            return s + l + "; })"
         mut l = "_l_" + self.next_temp()
         mut s = "({ List_" + lsfx + "* " + l + " = List_" + lsfx + "_new(); "
         mut i = 0
@@ -6577,6 +6707,22 @@ pub class CGenerator:
             s = s + "List_" + lsfx + "_append(" + l + ", " + item_s + "); "
             i = i + 1
         return s + l + "; })"
+
+    # C element type for a POD (non-ARC, no heap-box) List_<sfx> suffix, matching
+    # runtime/tauraro_rt.h's own struct field types exactly (List_u8.data is
+    # uint8_t*, etc) -- "" for any suffix that owns/retains its elements (str,
+    # ptr/class, TrTuple, TrFnVal, or an enum/@value_type list), which must keep
+    # using the per-element append path above.
+    pub def pod_list_ctype(self, lsfx: str) -> str:
+        if lsfx == "u8": return "uint8_t"
+        if lsfx == "i8": return "int8_t"
+        if lsfx == "u32": return "uint32_t"
+        if lsfx == "i32": return "int"
+        if lsfx == "i64": return "long long"
+        if lsfx == "f64": return "double"
+        if lsfx == "bool": return "_Bool"
+        if lsfx == "char": return "char"
+        return ""
 
     pub def gen_dict_literal(self, keys: Vec[Pointer[HirExpr]], vals: Vec[Pointer[HirExpr]], hint_ty: AstType) -> str:
         # Detect int-keyed from type args (works for empty dicts too)
@@ -7552,12 +7698,22 @@ pub class CGenerator:
                                     init_s = self.gen_expr(v)
                         self.eliding_get_retain = _saved_elide
                         # Dict.get/get_or returning a generic void* into a str-typed
-                        # local: gen_method_call only unboxes when call_ty is resolved
-                        # to "str"; recover here from the declared SLet type instead.
+                        # local: gen_method_call unboxes when call_ty resolves (via
+                        # resolve_generic_prim) to "str", but a BARE `Dict` annotation
+                        # with no value-type arg (`mut config: Dict = {...}`, #02_collections)
+                        # leaves call_ty unresolved there too -- recover here from the
+                        # declared SLet type instead. Must use the exact same resolved
+                        # check gen_method_call itself uses (not the raw call_ty.name)
+                        # so this only fires when THAT call genuinely fell through to
+                        # its generic-cast fallback -- otherwise it would double-unbox
+                        # a value gen_method_call already fully unboxed (confirmed
+                        # directly: a monomorphized `Map[str,T]` field access with
+                        # T=str produced `_tr_str_unbox(_tr_str_retain(_tr_str_unbox(...)))`
+                        # before this fix matched the two checks up).
                         if c_ty == "TrStr":
                             match v.read():
                                 case HirExpr.EMethodCall(slv_obj, slv_method, _, slv_call_ty):
-                                    if (slv_method == "get" or slv_method == "get_or") and not _is_str_type(slv_call_ty.name):
+                                    if (slv_method == "get" or slv_method == "get_or") and not _is_str_type(self.resolve_generic_prim(slv_call_ty.name)):
                                         mut slv_oty = hir_expr_type(slv_obj).name
                                         if slv_oty == "Map" or slv_oty == "Dict":
                                             init_s = "_tr_str_unbox(" + init_s + ")"
@@ -9402,8 +9558,12 @@ pub class CGenerator:
         # a non-zero scalar default, a null-pointer crash for a class instance
         # (see bugs.txt #1). One shared, run-once guard covers every exported
         # function regardless of which one the host happens to call first.
+        mut _safe_names = Vec[str].init(8)
+        mut _risky_names = Vec[str].init(8)
         if self.tier_define == "TAURARO_KERNEL":
             self.w("static int _tr_export_globals_done = 0;\n")
+            self.w("static int _tr_export_globals_done_risky = 0;\n")
+            self.global_init_names(prog, _safe_names, _risky_names)
         i = 0
         while i < prog.functions.len:
             mut f = prog.functions.get(i)
@@ -9434,11 +9594,45 @@ pub class CGenerator:
                     self.seed_params(f)
                     self.w(self.get_inline_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
                     if f.is_export and self.tier_define == "TAURARO_KERNEL":
+                        # SAFE half (literals/casts/ops — never allocates): attached
+                        # unconditionally, exactly like bugs.txt #1's original fix,
+                        # since it is harmless no matter which export the host calls
+                        # first or what allocator state exists yet.
                         self.w("    if (!_tr_export_globals_done) {\n")
                         self.w("        _tr_export_globals_done = 1;\n")
-                        self.emit_global_inits(prog)
+                        self.emit_global_inits_filtered(prog, true)
                         self.w("    }\n")
-                    self.gen_func_body(f.body, 1)
+                        # RISKY half (anything that allocates): generate the body into a
+                        # scratch buffer FIRST so we can check whether it actually
+                        # touches one of these globals before deciding to attach this
+                        # part here — see global_init_names's own comment for why
+                        # "whichever export the host calls first" is unsound for an
+                        # allocating initializer specifically: a program's own
+                        # allocator-bootstrap export (e.g. a `nebula_heap_init` that
+                        # just calls an @allocator's own init routine) is
+                        # conventionally the FIRST thing the host calls, and its body
+                        # never touches these globals — but if this half landed there
+                        # anyway, the allocating initializer would run BEFORE the
+                        # allocator is configured, silently handing back null/garbage
+                        # instead of a real block (confirmed via nebula's ide_demo_web
+                        # hanging at runtime on exactly this). Skipping attachment here
+                        # just defers the (still exactly-once, still guaranteed) block
+                        # to the next exported call that DOES reference one of these
+                        # globals — normally the very next host call in every nebula
+                        # example's own two-call boot convention.
+                        mut _saved_buf9 = self.buf
+                        self.buf = StringBuilder.init(256)
+                        self.gen_func_body(f.body, 1)
+                        mut _body_text9 = self.buf.to_string().as_str()
+                        self.buf = _saved_buf9
+                        if self._body_mentions_any(_body_text9, _risky_names):
+                            self.w("    if (!_tr_export_globals_done_risky) {\n")
+                            self.w("        _tr_export_globals_done_risky = 1;\n")
+                            self.emit_global_inits_filtered(prog, false)
+                            self.w("    }\n")
+                        self.w(_body_text9)
+                    else:
+                        self.gen_func_body(f.body, 1)
                     self.w("}\n\n")
                     self.cur_func  = ""
                     self.cur_class = ""
@@ -10238,8 +10432,12 @@ pub class CGenerator:
         # statement pass below (which runs global initializers) never
         # executes for it. One shared, run-once guard, triggered from
         # whichever exported function the host happens to call first.
+        mut _safe_names2 = Vec[str].init(8)
+        mut _risky_names2 = Vec[str].init(8)
         if self.tier_define == "TAURARO_KERNEL":
             self.w("static int _tr_export_globals_done = 0;\n")
+            self.w("static int _tr_export_globals_done_risky = 0;\n")
+            self.global_init_names(prog, _safe_names2, _risky_names2)
         i = 0
         if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.functions as usize):
             while i < prog.functions.len:
@@ -10275,11 +10473,34 @@ pub class CGenerator:
                                 self.cur_self_is_ptr = f.class_name != "" and self.value_types.contains(f.class_name) and self.vt_method_mutates_self(f)
                                 self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
                                 if f.is_export and self.tier_define == "TAURARO_KERNEL":
+                                    # See the sibling loop's own comment (generate()) for the
+                                    # safe/risky split's full rationale: a literal/scalar
+                                    # global initializer is harmless on the true first export
+                                    # call (attached unconditionally, below), but an
+                                    # allocating one is deferred until the body actually
+                                    # references it — bugs.txt #1's original fix (run every
+                                    # global init from whichever export the host calls first)
+                                    # is unsound for an allocating initializer whenever that
+                                    # export is itself an allocator-bootstrap function (e.g.
+                                    # nebula_heap_init): the constructor would run before the
+                                    # allocator is configured.
                                     self.w("    if (!_tr_export_globals_done) {\n")
                                     self.w("        _tr_export_globals_done = 1;\n")
-                                    self.emit_global_inits(prog)
+                                    self.emit_global_inits_filtered(prog, true)
                                     self.w("    }\n")
-                                self.gen_func_body(f.body, 1)
+                                    mut _saved_buf10 = self.buf
+                                    self.buf = StringBuilder.init(256)
+                                    self.gen_func_body(f.body, 1)
+                                    mut _body_text10 = self.buf.to_string().as_str()
+                                    self.buf = _saved_buf10
+                                    if self._body_mentions_any(_body_text10, _risky_names2):
+                                        self.w("    if (!_tr_export_globals_done_risky) {\n")
+                                        self.w("        _tr_export_globals_done_risky = 1;\n")
+                                        self.emit_global_inits_filtered(prog, false)
+                                        self.w("    }\n")
+                                    self.w(_body_text10)
+                                else:
+                                    self.gen_func_body(f.body, 1)
                                 self.cur_self_is_ptr = false
                                 self.w("}\n\n")
                                 self.cur_func  = ""
