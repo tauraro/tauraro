@@ -1249,7 +1249,16 @@ pub def compile_wasm_incremental(c_files: Vec[str], needs: Vec[bool], exe_path: 
     mut warn_flags = " -Wno-string-compare -Wno-comment -Wno-attributes -Wno-unused-value -Wno-unknown-attributes -Wno-parentheses-equality"
     # Same target_extra_flags("wasm32-unknown-unknown") flags the generic cross
     # path would apply, inlined here since this function bypasses that path.
-    mut wasm_flags = " -nostdlib --no-standard-libraries -DTAURARO_WASM=1 -DTAURARO_NO_OS=1"
+    # -fno-sanitize=undefined: zig cc enables UBSan by default for freestanding
+    # targets (nothing freestanding provides its own handlers — see the
+    # bare-metal turnkey link's own identical flag/comment a bit further down
+    # in this file). A small program can get lucky and have wasm-ld's
+    # --gc-sections drop every unreachable __ubsan_handle_* stub, but any
+    # program with enough real arithmetic/indexing keeps some reachable —
+    # found via examples/web_ide (a text editor) failing to instantiate with
+    # "function import requires a callable" for __ubsan_handle_type_mismatch_v1
+    # and __multi3, imports a simpler probe program never pulled in.
+    mut wasm_flags = " -nostdlib --no-standard-libraries -fno-sanitize=undefined -DTAURARO_WASM=1 -DTAURARO_NO_OS=1"
     mut common = " -O" + opt_level + wasm_flags + warn_flags + " -DTAURARO_NO_RT_HELPERS \"-I" + inc_dir + "\""
 
     # -- 1. Compile each changed module to its .o (cache reused across builds) --

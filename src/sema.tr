@@ -5186,6 +5186,25 @@ extend Sema:
                                                 if _sf_fd.ret_ty as usize != 0 as usize: fret = _sf_fd.ret_ty.read()
                                                 if _sf_fd.generics.len > 0 and _sf_fd.generics.get(0) == fret.name:
                                                     fret = AstType.init(farg_c)
+                                                # A `throws`-declared function's call-site type is
+                                                # Result[V, Err] (mirrors register_decl's identical
+                                                # wrapping for the ordinary, non-generic-explicit-call
+                                                # case) -- without this, the call's inferred HIR type
+                                                # stayed the bare, un-wrapped success type while the
+                                                # function's ACTUAL C-level return type is (and always
+                                                # is, for any throws function) the `Result` struct, so
+                                                # codegen's `return <this call>` inside another throws
+                                                # function tried to box the whole Result struct into a
+                                                # fresh Result_Ok's void* payload slot -- "cannot
+                                                # convert to a pointer type", confirmed directly with a
+                                                # tauorm-unrelated repro mirroring taumigrate's
+                                                # introspect_schema[C,RS] calling introspect_sqlite[C,RS](..).
+                                                if _sf_fd.throws_ty as usize != 0 as usize:
+                                                    if _sf_fd.throws_ty.read().name != "":
+                                                        mut _sf_result = AstType.init("Result")
+                                                        _sf_result.args.push(box_asttype(fret))
+                                                        _sf_result.args.push(_sf_fd.throws_ty)
+                                                        fret = _sf_result
                                             ret_ty = fret
                                             hcallee = box_hirexpr(HirExpr.EIdent(gn + "__MONO_" + farg_c, fret, false))
                                         case Expr.ETuple(ftargs):
@@ -5218,6 +5237,15 @@ extend Sema:
                                                     if _mf_fd.generics.get(_mf_gi) == fret2.name and _mf_gi < _mf_names.len:
                                                         fret2 = AstType.init(_mf_names.get(_mf_gi))
                                                     _mf_gi = _mf_gi + 1
+                                                # See the single-type-arg EIdent case just above for
+                                                # the full account -- identical throws-Result-wrapping
+                                                # gap, same fix.
+                                                if _mf_fd.throws_ty as usize != 0 as usize:
+                                                    if _mf_fd.throws_ty.read().name != "":
+                                                        mut _mf_result = AstType.init("Result")
+                                                        _mf_result.args.push(box_asttype(fret2))
+                                                        _mf_result.args.push(_mf_fd.throws_ty)
+                                                        fret2 = _mf_result
                                             ret_ty = fret2
                                             hcallee = box_hirexpr(HirExpr.EIdent(_mf_mangled, fret2, false))
                                         case _: pass

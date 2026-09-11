@@ -1,0 +1,18 @@
+# Does a generic function A[C,RS] calling ANOTHER generic function
+# B[C,RS], passing A's OWN type params as B's explicit type args, mangle
+# the inner call correctly? (mirrors taumigrate's introspect_schema[C,RS]
+# calling introspect_sqlite[C,RS](engine)/introspect_postgres[C,RS](engine))
+
+class Foo:
+    pub n: int
+
+def inner[C, RS](x: C) -> int:
+    return 42
+
+def outer[C, RS](x: C) -> int:
+    return inner[C, RS](x)
+
+def main():
+    mut f = Foo()
+    f.n = 7
+    print(outer[Foo, int](f).to_str())

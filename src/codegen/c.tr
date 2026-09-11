@@ -1378,6 +1378,54 @@ pub class CGenerator:
         self.proto_buf = old_pbuf
         self.type_subst = old_subst
 
+    # See gen_call's call site for the full account of why this exists.
+    # Splits a `fname__MONO_T1_T2`-style mangled callee name and resolves
+    # EACH type-arg segment through the ACTIVE monomorphization
+    # substitution via resolve_generic_tyname -- a segment that isn't
+    # currently substituted (i.e. it was already a concrete type name
+    # written at a non-generic call site, the common/pre-existing case)
+    # comes back unchanged. If at least one segment actually resolved to
+    # something new, triggers ensure_mono_func/_n for the NOW-concrete
+    # target (so the name this returns is guaranteed to actually get
+    # generated somewhere) and returns the re-mangled name; otherwise
+    # returns `mangled` completely unchanged, a no-op for every
+    # already-working call shape.
+    pub def resolve_nested_mono_callee(self, mangled: str) -> str:
+        mut nlen = _tr_strlen(mangled)
+        mut si = 0
+        mut found = false
+        mut sep_p = 0
+        while si <= nlen - 7 and not found:
+            if mangled.slice(si, si + 7) == "__MONO_":
+                found = true
+                sep_p = si
+            si = si + 1
+        if not found: return mangled
+        mut fn_name = mangled.slice(0, sep_p)
+        mut targ_text = mangled.slice(sep_p + 7, nlen)
+        mut raw_targs = targ_text.split("_")
+        mut new_targs: Vec[str] = Vec[str].init(raw_targs.len)
+        mut changed = false
+        mut ti = 0
+        while ti < raw_targs.len:
+            mut seg = raw_targs.get(ti)
+            mut resolved = self.resolve_generic_tyname(seg)
+            if resolved != seg: changed = true
+            new_targs.push(resolved)
+            ti = ti + 1
+        if not changed: return mangled
+        if new_targs.len == 1:
+            self.ensure_mono_func(fn_name, new_targs.get(0))
+        else:
+            self.ensure_mono_func_n(fn_name, new_targs)
+        mut joined = ""
+        mut ji = 0
+        while ji < new_targs.len:
+            if ji > 0: joined = joined + "_"
+            joined = joined + new_targs.get(ji)
+            ji = ji + 1
+        return fn_name + "__MONO_" + joined
+
     # Infer the single type argument of a generic METHOD (its OWN `[T]`, distinct from
     # the class's generics) from the call args. Args align to the non-self params.
     pub def infer_method_targ(self, cls_name: str, method: str, args: Vec[Pointer[HirExpr]]) -> str:
@@ -3716,6 +3764,30 @@ pub class CGenerator:
                 # Use raw identifier name (not gen_expr output) so C-keyword variable names
                 # like `int`, `float`, `count` don't obscure builtin dispatch.
                 base_callee = raw_n
+                # An explicit generic call `f[T1,T2](...)` mangles its callee
+                # to `f__MONO_T1_T2` once, at SEMA time -- baked as literal
+                # text from whatever names were written at the call site.
+                # When that call site sits inside ANOTHER generic function's
+                # own body, T1/T2 are the OUTER function's own still-abstract
+                # type PARAMETERS, not concrete types: sema can't know what
+                # they'll resolve to, since that's only decided per-
+                # instantiation, here, during codegen's OWN monomorphization
+                # of the outer function. Without this, the baked name is
+                # emitted completely unchanged in every instantiation --
+                # "implicit declaration of function 'inner__MONO_C_RS'" (a
+                # real copy for the ACTUAL concrete types, e.g.
+                # "inner__MONO_Foo_int", was never generated either, since
+                # nothing ever asked for it). Confirmed directly with a
+                # minimal, DB-unrelated repro (`outer[C,RS]` calling
+                # `inner[C,RS](x)`, instantiated as `outer[Foo,int]`).
+                if base_callee.contains("__MONO_"):
+                    base_callee = self.resolve_nested_mono_callee(base_callee)
+                    # Every fallback return in this function uses callee_s
+                    # (computed above, from the UN-resolved name) for a
+                    # plain identifier callee, not base_callee -- keep them
+                    # in sync for this case so the resolved name actually
+                    # reaches the emitted call text.
+                    callee_s = base_callee
             case HirExpr.EIndex(base_expr, idx_expr, idx_ty):
                 match base_expr.read():
                     case HirExpr.EIdent(n, _, _):
@@ -7449,7 +7521,23 @@ pub class CGenerator:
                         mut ret_s = self.gen_expr(e)
                         ret_s = self.flush_wraps(ret_s, false)
                         mut ret_ty_n = hir_expr_type(e).name
-                        if _is_int_type(ret_ty_n) or ret_ty_n == "bool" or ret_ty_n == "char":
+                        if ret_ty_n == "Result" or ret_ty_n == "Option" or ret_ty_n == "Tuple" or ret_ty_n == "tuple":
+                            # The returned EXPRESSION's own type is already the
+                            # correctly-shaped aggregate (a call to another
+                            # throws/Result-returning function, now correctly
+                            # inferred as such by sema for the explicit generic
+                            # call case too -- see sema.tr's ECall/EIndex
+                            # explicit-type-arg handling) -- return it VERBATIM,
+                            # not wrapped in a second, redundant Result_Ok layer
+                            # (which isn't even well-typed: `ret_s` already IS a
+                            # `Result` struct at the C level, so boxing it into
+                            # `.data.Ok.val=(void*)(ret_s)` is a struct-to-pointer
+                            # cast, "cannot convert to a pointer type"). Confirmed
+                            # directly with a minimal, tauorm-unrelated repro
+                            # mirroring taumigrate's introspect_schema[C,RS]
+                            # returning introspect_sqlite[C,RS](...)'s own result.
+                            self.w(pad + "return (" + ret_s + ");\n")
+                        elif _is_int_type(ret_ty_n) or ret_ty_n == "bool" or ret_ty_n == "char":
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(uintptr_t)(" + ret_s + ")});\n")
                         elif _is_float_type(ret_ty_n):
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=_tr_f64_to_ptr((double)(" + ret_s + "))});\n")
@@ -7888,6 +7976,52 @@ pub class CGenerator:
                                 mut _ai_lval = _ai_obj + ".data[(_tr_bounds_check(" + _ai_key + ", " + _ai_ty.array_size.to_str() + "), " + _ai_key + ")]"
                                 self.w(pad + self.flush_wraps(_ai_lval + " = " + self.gen_expr(v), true) + ";\n")
                                 return
+                    case _: pass
+                # `x = f()?` reassigning an ALREADY-DECLARED plain variable
+                # (as opposed to `mut x = f()?`, an SLet, handled with its
+                # own dedicated ETryExpr case elsewhere in this function)
+                # fell through to gen_expr's generic ETryExpr fallback,
+                # whose own comment admits "proper propagation handled at
+                # statement level" -- untrue for this exact statement shape.
+                # That fallback neither checks Result.tag (silently
+                # treating an Err's payload as if it were Ok, since
+                # .data.Ok.val and .data.Err.err alias the same union slot)
+                # nor unboxes a str Ok value (emitting a bare `(TrStr*)`
+                # pointer where the target's own type is a `TrStr` VALUE
+                # struct -- "incompatible types when assigning to type
+                # 'TrStr' from type 'TrStr *'"). Confirmed directly with a
+                # minimal, tauorm-unrelated repro (a `while` loop
+                # reassigning a str local from another throws function's
+                # call, inside a monomorphized generic function body).
+                # Mirrors SLet's own ETryExpr handling a few cases up;
+                # scoped to a plain EIdent target, the overwhelmingly
+                # common shape for this pattern.
+                match v.read():
+                    case HirExpr.ETryExpr(inner_try4, ok_ty4):
+                        match t.read():
+                            case HirExpr.EIdent(_trn, _, _):
+                                mut tmp_qr4 = "_qr" + self.next_temp()
+                                mut inner_qr_v4 = self.flush_wraps(self.gen_expr(inner_try4), false)
+                                self.w(pad + "Result " + tmp_qr4 + " = (" + inner_qr_v4 + ");\n")
+                                self.w(pad + "if (" + tmp_qr4 + ".tag == Result_Err) return " + tmp_qr4 + ";\n")
+                                mut ok_c4 = self.type_to_c(ok_ty4)
+                                if ok_c4 == "void" or ok_c4 == "__auto_type": ok_c4 = "long long"
+                                mut ok_val4 = ""
+                                if _is_int_type(ok_ty4.name) or ok_ty4.name == "bool" or ok_ty4.name == "char":
+                                    ok_val4 = "(" + ok_c4 + ")(uintptr_t)" + tmp_qr4 + ".data.Ok.val"
+                                elif _is_float_type(ok_ty4.name):
+                                    ok_val4 = "_tr_ptr_to_f64(" + tmp_qr4 + ".data.Ok.val)"
+                                elif _is_str_type(ok_ty4.name):
+                                    if self.str_local_names.contains(_trn):
+                                        self.w(pad + "_tr_str_release(" + _safe_c_varname(_trn) + ");\n")
+                                    ok_val4 = "_tr_str_unbox(" + tmp_qr4 + ".data.Ok.val)"
+                                elif ok_c4.ends_with("*"):
+                                    ok_val4 = "(" + ok_c4 + ")" + tmp_qr4 + ".data.Ok.val"
+                                else:
+                                    ok_val4 = "(" + ok_c4 + "*)" + tmp_qr4 + ".data.Ok.val"
+                                self.w(pad + _safe_c_varname(_trn) + " = " + ok_val4 + ";\n")
+                                return
+                            case _: pass
                     case _: pass
                 mut _assign_rhs = ""
                 match v.read():
@@ -10165,7 +10299,19 @@ pub class CGenerator:
         mut fwd_i = 0
         while fwd_i < prog.functions.len:
             mut fwd_f = prog.functions.get(fwd_i)
-            if fwd_f.name != "main" and not fwd_f.is_extern and not fwd_f.is_public:
+            # A generic function (unlike every other case below) has no
+            # forward declaration of its own -- only its MONOMORPHIZED
+            # copies do (emitted separately, into mono_buf). Every other
+            # prototype-emission loop in this file already excludes
+            # generics for exactly this reason; this one didn't, and
+            # nothing had exercised a PRIVATE (non-pub, so routed through
+            # this loop rather than tauraro_types.h) generic free function
+            # in a multi-module build until now -- it rendered the
+            # function's own unsubstituted param types literally (e.g. a
+            # `def(engine: Engine[C, RS])` parameter as if "C"/"RS" were
+            # real class names, "unknown type name 'Engine_C_RS'").
+            # Confirmed directly with a minimal, tauorm-unrelated repro.
+            if fwd_f.name != "main" and not fwd_f.is_extern and not fwd_f.is_public and fwd_f.generics.len == 0:
                 mut in_this_mod = false
                 if fwd_f.class_name == "" and fn_set.contains(fwd_f.name):
                     in_this_mod = true
