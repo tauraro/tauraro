@@ -1083,6 +1083,21 @@ pub class CGenerator:
             # expected everywhere the function is called, an immediate
             # incompatible-types compile error at every call site.
             mut old_throws = self.cur_throws_ty
+            # See ensure_mono_func_n's identical fix (same file) for the
+            # full account: this method-body loop can also run
+            # RE-ENTRANTLY, mid-generation of an ENCLOSING function's own
+            # body (a call to a generic method inside a loop, etc.), so
+            # decl_vars and its siblings must be saved/restored here too,
+            # not just reset -- otherwise a later statement in the
+            # ENCLOSING body loses track of its own already-declared
+            # locals.
+            mut old_decl_vars = self.decl_vars
+            mut old_str_local_names = self.str_local_names
+            mut old_coll_local_sfx = self.coll_local_sfx
+            mut old_coll_local_idict = self.coll_local_idict
+            mut old_coll_local_strval = self.coll_local_strval
+            mut old_coll_local_vtcoll = self.coll_local_vtcoll
+            mut old_self_is_ptr = self.cur_self_is_ptr
             self.cur_class = mono_name
             self.cur_func  = m.name
             self.cur_throws_ty = m.throws_ty.name
@@ -1097,11 +1112,17 @@ pub class CGenerator:
             mut sig = self.get_inline_attrs(m) + self.gen_func_sig(m, mono_name)
             self.w(sig + " {\n")
             self.gen_func_body(m.body, 1)
-            self.cur_self_is_ptr = false
+            self.cur_self_is_ptr = old_self_is_ptr
             self.w("}\n\n")
             self.cur_class = old_class
             self.cur_func  = old_func
             self.cur_throws_ty = old_throws
+            self.decl_vars = old_decl_vars
+            self.str_local_names = old_str_local_names
+            self.coll_local_sfx = old_coll_local_sfx
+            self.coll_local_idict = old_coll_local_idict
+            self.coll_local_strval = old_coll_local_strval
+            self.coll_local_vtcoll = old_coll_local_vtcoll
             mi = mi + 1
         self.fn_mono_body = self.buf
         self.buf        = _cmb_obuf
@@ -1352,6 +1373,35 @@ pub class CGenerator:
         # statement emits a bare, unwrapped value instead of a
         # `Result`-wrapped one.
         mut old_throws = self.cur_throws_ty
+        # Per-function variable-tracking state (decl_vars and its
+        # siblings) must be SAVED and RESTORED around this call, not just
+        # reset -- this function can run RE-ENTRANTLY, mid-generation of
+        # an ENCLOSING function's own body: a call inside a while-loop
+        # etc. to another explicit generic function, using the enclosing
+        # function's OWN still-abstract type params as the callee's
+        # explicit type args (resolved via resolve_nested_mono_callee),
+        # triggers ensure_mono_func_n for THAT callee right there, in the
+        # middle of generating the enclosing function's statements.
+        # Without saving/restoring here, resetting these maps for the
+        # INNER function's own body permanently wipes the OUTER
+        # function's already-declared locals from `decl_vars`, so a
+        # later reassignment in the outer body (`count = count + 1`)
+        # wrongly reads "count was never declared" and re-declares it as
+        # a NEW shadowing local instead of assigning the existing one --
+        # "'count' undeclared" (a variable named to collide with a
+        # C-keyword-escaped name makes the bogus redeclaration's OWN
+        # unescaped read of the same name a hard compile error; on a
+        # plain, non-escaped name it would just be silent, incorrect
+        # shadowing). Confirmed directly with a minimal, taumigrate-
+        # unrelated repro (`outer[C,RS]` with a local `count`,
+        # reassigned after calling `inner[C,RS](x)` in the same loop).
+        mut old_decl_vars = self.decl_vars
+        mut old_str_local_names = self.str_local_names
+        mut old_coll_local_sfx = self.coll_local_sfx
+        mut old_coll_local_idict = self.coll_local_idict
+        mut old_coll_local_strval = self.coll_local_strval
+        mut old_coll_local_vtcoll = self.coll_local_vtcoll
+        mut old_self_is_ptr = self.cur_self_is_ptr
         self.cur_class = ""
         self.cur_func = mono_fname
         self.cur_throws_ty = f.throws_ty.name
@@ -1367,11 +1417,17 @@ pub class CGenerator:
         self.cur_self_is_ptr = f.class_name != "" and self.value_types.contains(f.class_name) and self.vt_method_mutates_self(f)
         self.w(sig + " {\n")
         self.gen_func_body(f.body, 1)
-        self.cur_self_is_ptr = false
+        self.cur_self_is_ptr = old_self_is_ptr
         self.w("}\n\n")
         self.cur_class = old_class
         self.cur_func = old_func
         self.cur_throws_ty = old_throws
+        self.decl_vars = old_decl_vars
+        self.str_local_names = old_str_local_names
+        self.coll_local_sfx = old_coll_local_sfx
+        self.coll_local_idict = old_coll_local_idict
+        self.coll_local_strval = old_coll_local_strval
+        self.coll_local_vtcoll = old_coll_local_vtcoll
         self.fn_mono_body.append(mono_body_sb.to_string().as_str())
         self.buf = old_buf
         self.struct_buf = old_sbuf
@@ -1502,6 +1558,17 @@ pub class CGenerator:
         self.proto_buf = self.fn_mono_body
         mut old_class = self.cur_class
         mut old_func = self.cur_func
+        # See ensure_mono_func_n's identical fix (same file) for the full
+        # account: this can also run RE-ENTRANTLY mid-generation of an
+        # ENCLOSING function's body, so decl_vars and its siblings must
+        # be saved/restored here too, not just reset.
+        mut old_decl_vars = self.decl_vars
+        mut old_str_local_names = self.str_local_names
+        mut old_coll_local_sfx = self.coll_local_sfx
+        mut old_coll_local_idict = self.coll_local_idict
+        mut old_coll_local_strval = self.coll_local_strval
+        mut old_coll_local_vtcoll = self.coll_local_vtcoll
+        mut old_self_is_ptr = self.cur_self_is_ptr
         self.cur_class = cls_name
         self.cur_func = method
         self.decl_vars = Map[str, bool].init(64)
@@ -1514,10 +1581,16 @@ pub class CGenerator:
         self.cur_self_is_ptr = self.value_types.contains(cls_name) and self.vt_method_mutates_self(m)
         self.w(sig + " {\n")
         self.gen_func_body(m.body, 1)
-        self.cur_self_is_ptr = false
+        self.cur_self_is_ptr = old_self_is_ptr
         self.w("}\n\n")
         self.cur_class = old_class
         self.cur_func = old_func
+        self.decl_vars = old_decl_vars
+        self.str_local_names = old_str_local_names
+        self.coll_local_sfx = old_coll_local_sfx
+        self.coll_local_idict = old_coll_local_idict
+        self.coll_local_strval = old_coll_local_strval
+        self.coll_local_vtcoll = old_coll_local_vtcoll
         self.fn_mono_body = self.buf
         self.buf = old_buf
         self.struct_buf = old_sbuf
