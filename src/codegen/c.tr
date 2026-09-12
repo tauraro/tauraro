@@ -3310,6 +3310,25 @@ pub class CGenerator:
                 return "_tr_obj_retain(" + s + ")"
             case HirExpr.EPropAccess(_, _, _):
                 return "_tr_obj_retain(" + s + ")"
+            # A heap-class element read out of a `List[T]`/`Vec[T]` via `coll[i]` is an
+            # ALIAS into that collection's own owned storage, exactly like EIdent/
+            # EPropAccess above — not a fresh, already-rc=1 value. Without this, storing
+            # `coll[i]` into another longer-lived container (`.append()`, a dict value, a
+            # Set.add, a list literal element, an assignment, a `mut x = coll[i]` local,
+            # or a `return coll[i]`) under-counts the reference: the new holder treats
+            # itself as owning rc=1 it never actually incremented, so when EITHER the
+            # source collection's element is dropped (e.g. its own tree is torn down and
+            # rebuilt) OR the new holder's copy is dropped, the other is left pointing at
+            # freed/reused memory (double-free / use-after-free depending on drop order).
+            # Found via nebula's `toolkit/ui/interp.tr` `Interpreter.emit()`: the overlay
+            # feature was the first call site anywhere that stores a `box.children[i]`
+            # read out of a live `List[LayoutBox]` into a second, longer-lived
+            # `List[LayoutBox]` field (`self.overlays.append(box.children[i])`) — every
+            # prior use of a collection-index read in this codebase was transient
+            # (passed straight into a same-call function argument, never stored), so
+            # this gap in the retain-on-store inference was never exercised before.
+            case HirExpr.EIndex(_, _, _):
+                return "_tr_obj_retain(" + s + ")"
             case _:
                 return s
 
