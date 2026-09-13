@@ -7,7 +7,7 @@
   <p>
     <img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache%202.0-blue?style=flat-square" alt="License"/>
     <img src="https://img.shields.io/badge/version-v0.0.8-brightgreen?style=flat-square" alt="Version"/>
-    <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey?style=flat-square" alt="Platform"/>
+    <img src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20Android(termux)-lightgrey?style=flat-square" alt="Platform"/>
     <img src="https://img.shields.io/badge/backends-C%20%C2%B7%20LLVM%20%C2%B7%20WASM%20%C2%B7%20bare--metal-red?style=flat-square" alt="Backends"/>
     <img src="https://img.shields.io/badge/self--hosted-yes-purple?style=flat-square" alt="Self-hosted"/>
   </p>
@@ -50,8 +50,9 @@ Download the latest binary from the [Releases](https://github.com/tauraro/taurar
 | Platform | File |
 |----------|------|
 | Windows (x64) | `tauraroc-windows-x64.zip` |
-| Linux (x64) | `tauraroc-linux-x64.tar.gz` |
-| macOS (x64/arm64) | `tauraroc-macos.tar.gz` |
+| Linux (x64) | `tauraroc-linux-x64.zip` |
+| Linux (arm64) | `tauraroc-linux-arm64.zip` |
+| macOS (arm64) | `tauraroc-macos-arm64.zip` |
 
 </div>
 
@@ -97,7 +98,7 @@ tauraroc --run hello.tr
 | **F-strings** | `f"result = {value}"` — zero overhead |
 | **Ownership** | Automatic memory management, no GC |
 | **Error handling** | `Result[T,E]`, `throws`, `?` operator |
-| **Concurrency** | `spawn`, `task_group:`, `await_all`, `Thread.spawn`, `Chan[T]`, `Mutex[T]`, `Atomic[T]` |
+| **Concurrency** | `spawn`, `task_group:`, `await_all`, `Thread.spawn`, `AsyncPool` (work-stealing, multi-core), `Chan[T]`, `Mutex[T]`, `Atomic[T]` |
 | **Data race safety** | `Sendable` interface enforced at compile time on all spawn/thread boundaries |
 | **Unsafe** | `unsafe:`, `Pointer[T]`, inline `asm()` |
 | **GPU** | `gpu:` blocks → OpenMP parallel loops |

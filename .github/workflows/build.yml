@@ -628,20 +628,19 @@ jobs:
           set -e
           chmod +x bootstrap-seed/tauraroc
           BOOTSTRAP_BIN="$(pwd)/bootstrap-seed/tauraroc" bash scripts/build.sh
-          mv tauraroc tauraroc-android-arm64
 
       - name: Verify the binary is actually static (no dynamic-linker dependency)
         shell: bash
         run: |
           set -e
-          file tauraroc-android-arm64
+          file tauraroc
           # A genuinely static ELF has no INTERP program header and `ldd`
           # refuses/reports "not a dynamic executable" — either phrasing is
           # fine, but it must NOT list resolved .so paths (that would mean
           # the exact Ubuntu-vs-Termux path mismatch this job exists to avoid).
-          if ldd tauraroc-android-arm64 2>&1 | grep -q "=>"; then
+          if ldd tauraroc 2>&1 | grep -q "=>"; then
             echo "FAIL: binary is dynamically linked (found resolved .so dependencies)"
-            ldd tauraroc-android-arm64
+            ldd tauraroc
             exit 1
           fi
           echo "OK: no dynamic dependencies — safe to run under Termux's own filesystem layout"
@@ -651,19 +650,19 @@ jobs:
         env:
           # Test PROGRAMS compiled along the way don't need to be static
           # themselves (they run immediately, right here on ubuntu-22.04-arm,
-          # not shipped anywhere) - only tauraroc-android-arm64 itself does.
+          # not shipped anywhere) - only tauraroc itself does.
           CC: "gcc"
           CFLAGS: "-O2 -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700"
           LDFLAGS: "-lm -lpthread -lrt"
         run: |
-          BOOTSTRAP_BIN="$(pwd)/tauraroc-android-arm64" bash scripts/run_tests.sh
+          BOOTSTRAP_BIN="$(pwd)/tauraroc" bash scripts/run_tests.sh
 
       # -------------------------------------------------------
       # Bundle zig, same as the main build job (and same cache key -
       # "linux-arm64"'s zig is aarch64, the exact arch this job runs on, so
       # this normally CACHE-HITS the copy the main `build` job's own
       # ubuntu-22.04-arm leg already populated, no second ~200 MB download).
-      # Without this, tauraroc-android-arm64 would have no --backend llvm
+      # Without this, this build's tauraroc would have no --backend llvm
       # and no --target cross-compilation at all inside Termux, since
       # Termux ships neither a system clang/llvm nor per-target sysroots by
       # default - `zig cc` is what makes both self-contained. zig's own
@@ -698,7 +697,7 @@ jobs:
       - name: Generate SHA256 checksum
         shell: bash
         run: |
-          sha256sum tauraroc-android-arm64 > tauraroc-android-arm64.sha256
+          sha256sum tauraroc > tauraroc-android-arm64.sha256
           cat tauraroc-android-arm64.sha256
 
       - name: Upload artifact
@@ -707,13 +706,21 @@ jobs:
           name: tauraroc-android-arm64
           if-no-files-found: error
           path: |
-            tauraroc-android-arm64
+            tauraroc
             tauraroc-android-arm64.sha256
             zig/
             src/
             std/
             runtime/
             examples/
+            benchmarks/
+
+      - name: Upload SHA256 checksum artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauraroc-android-arm64-sha256
+          if-no-files-found: error
+          path: tauraroc-android-arm64.sha256
 
   # -----------------------------------------------------------------
   # Benchmarks: run the C vs Rust vs Tauraro suite (time + peak memory)
