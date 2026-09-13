@@ -38,14 +38,27 @@ added here as each phase lands.
   panic) stack a shared, refcounted object (`_TrExcChain`,
   `runtime/tauraro_rt.h`) inherited by every coroutine in one nested-`await`
   call chain, including a plain (non-coroutine) top-level caller like `async
-  def main()`'s own `try` block. **Known remaining gap, tracked as follow-up,
-  not fixed by this change:** on the Windows Fiber backend specifically, the
-  actual `longjmp` used to unwind into the (now correctly-found) handler can
-  still crash (`STATUS_INVALID_HANDLE`) when it crosses a `SwitchToFiber`
-  boundary, since Windows tracks "current fiber" as separate OS-level state a
-  raw `longjmp` doesn't update — a real, pre-existing, Windows-specific
-  limitation, unrelated to the exception-chain fix itself and not something
-  this change could safely fix at the same time.
+  def main()`'s own `try` block.
+- **Windows Fiber cross-boundary `longjmp` crash on exception raise, fixed.**
+  The exception-chain fix above still crashed with `STATUS_INVALID_HANDLE`
+  on the Windows Fiber backend specifically: `_tr_exc_raise`'s cross-coroutine
+  branch did a raw `longjmp` straight into the handler's fiber, but Windows
+  tracks "current fiber" as separate OS-level state that only `SwitchToFiber`
+  updates — a `longjmp` that crosses fibers leaves that state stale, and the
+  next Fiber API call crashes. Fixed by never `longjmp`-ing across a fiber
+  boundary: a raise on a coroutine that isn't the handler's own fiber now
+  marks the coroutine `failed`, optionally requeues its joiner, and hands
+  control back to the scheduler through the *already-safe* symmetric
+  `SwitchToFiber` suspend/resume path (`_tr_co_to_sched`) that `await`
+  already used. The resumer (the joiner's `_tr_co_await` return path, or the
+  root's own polling loop) notices `failed` and re-raises from there — now
+  genuinely running on its own fiber, so each hop is safe, and the unwind
+  telescopes outward one safe hop at a time however deep the `await` chain
+  is. Verified on 1-, 2-, and 3-level-deep nested-`await` exception unwinds
+  with no regressions. A narrower, still-open hazard remains out of scope:
+  `Thread.spawn`'s own panic-buf escalation could in principle hit the same
+  class of cross-fiber jump for a detached coroutine spawned with no
+  try/except of its own at all.
 - **F-1 collection-push leak closed.** `v.push(Box.init(k))` for a `Vec[HeapClass]`
   RETAINED the fresh constructor result (rc 1→2) instead of MOVING it, leaking the
   temporary's reference (the container releases only one). Static constructors

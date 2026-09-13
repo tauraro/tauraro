@@ -1,0 +1,20 @@
+async def level3(n: int) -> int:
+    if n < 0:
+        raise("deep failure")
+    return n
+
+async def level2(n: int) -> int:
+    mut r = await level3(n)
+    return r + 1
+
+async def level1(n: int) -> int:
+    mut r = await level2(n)
+    return r + 1
+
+async def main():
+    try:
+        mut v = await level1(-1)
+        print(v.to_str())
+    except e:
+        print("caught at root through 3 hops: " + e)
+    print("done")
