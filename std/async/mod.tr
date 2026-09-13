@@ -8,6 +8,7 @@
 #   from std.async import Mutex, RWLock, Semaphore, WaitGroup, Barrier, Once
 #   from std.async import Timer, Ticker
 #   from std.async import Thread, Atomic, ThreadLocal, Sendable
+#   from std.async import AsyncPool, AsyncTask
 #
 # Or per-module:
 #   from std.async.task       import Task, Future
@@ -22,6 +23,7 @@
 #   from std.async.timer      import Timer, Ticker
 #   from std.async.thread     import Thread, Atomic, ThreadLocal
 #   from std.async.send       import Sendable
+#   from std.async.pool       import AsyncPool, AsyncTask
 
 from std.async.task       import Task, Future
 from std.async.channel    import Channel
@@ -36,3 +38,4 @@ from std.async.timer      import Timer, Ticker
 from std.async.thread     import Thread, Atomic, ThreadLocal
 from std.async.send       import Sendable
 from std.async.coro       import Coro
+from std.async.pool       import AsyncPool, AsyncTask

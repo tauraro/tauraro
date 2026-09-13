@@ -17,6 +17,35 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Fixed
+- **`Type.auto()`-style zero-arg static factory constructors (e.g.
+  `ThreadPool.auto()`) never had their return type inferred** — confirmed
+  present in the unmodified compiler, not introduced by the `AsyncPool` work
+  that surfaced it. The generic static-constructor return-type rule only
+  matched `method == "init" or method == "new"`; `ThreadPool.auto()`'s call
+  fell through un-typed, so `mut pool = ThreadPool.auto()` left `pool`
+  untyped and every subsequent `pool.spawn(...)`/`.wait()`/`.free()` call
+  silently miscompiled as a call to an undeclared global function (a real,
+  loud C compile error, not a silent wrong-behavior bug). Fixed by adding
+  `auto` alongside `init`/`new` in that rule (`src/sema.tr`) — fixes
+  `ThreadPool.auto()` and the new `AsyncPool.auto()` alike.
+- **An exception raised inside an `await`ed call was never caught by the
+  awaiter's own `try`/`except`** — confirmed present in the unmodified
+  compiler via a minimal, non-coroutine-unrelated repro (`try: r = await
+  risky(); except e: ...` where `risky()` raises). Root cause: the exception
+  stack was plain thread-local, but `await` runs the callee as a genuinely
+  separate child coroutine — when the child raised, it had no way to reach
+  the *parent* coroutine's pushed handler. Fixed by making the exception (and
+  panic) stack a shared, refcounted object (`_TrExcChain`,
+  `runtime/tauraro_rt.h`) inherited by every coroutine in one nested-`await`
+  call chain, including a plain (non-coroutine) top-level caller like `async
+  def main()`'s own `try` block. **Known remaining gap, tracked as follow-up,
+  not fixed by this change:** on the Windows Fiber backend specifically, the
+  actual `longjmp` used to unwind into the (now correctly-found) handler can
+  still crash (`STATUS_INVALID_HANDLE`) when it crosses a `SwitchToFiber`
+  boundary, since Windows tracks "current fiber" as separate OS-level state a
+  raw `longjmp` doesn't update — a real, pre-existing, Windows-specific
+  limitation, unrelated to the exception-chain fix itself and not something
+  this change could safely fix at the same time.
 - **F-1 collection-push leak closed.** `v.push(Box.init(k))` for a `Vec[HeapClass]`
   RETAINED the fresh constructor result (rc 1→2) instead of MOVING it, leaking the
   temporary's reference (the container releases only one). Static constructors
@@ -284,7 +313,8 @@ added here as each phase lands.
   chains, cooperative `Coro.sleep_ms` (timer-parked) and `Coro.yield_now`, and
   reactor-based `Coro.await_readable`/`await_writable` are provided via the new
   `std/async/coro` module. (`spawn`/`task_group` keep OS-thread parallelism for
-  CPU-bound work; multi-core green-thread scheduling is future work.)
+  CPU-bound work.) Multi-core work-stealing landed separately — see `AsyncPool`
+  under Added, and `await_all`'s entry under Fixed.
 - Debug builds (`--debug`) now emit C `#line N "source.tr"` directives mapping
   each generated statement back to its original Tauraro source file and line,
   so GCC diagnostics and GDB backtraces reference the `.tr` source rather than
@@ -308,6 +338,31 @@ added here as each phase lands.
   is diagnostic-only and never affects codegen.)
 
 ### Added
+- **`AsyncPool`/`AsyncTask`: a multi-core, work-stealing pool for top-level
+  async calls**, closing the "multi-core green-thread scheduling" gap noted
+  above. Each of N persistent worker OS threads owns a lock-free
+  Chase-Lev work-stealing deque (`runtime/tauraro_rt.h`'s `_TrDeque`); an idle
+  worker steals a not-yet-started task from a busier sibling's deque rather
+  than waiting, the same load-balancing model as Go's or Tokio's runtime. A
+  submitted call runs as a real coroutine on whichever worker executes it, so
+  its own internal `await`s work correctly, and N calls share a small, reused
+  pool instead of N throwaway OS threads:
+  ```
+  mut pool = AsyncPool.auto()             # sized to the machine's cores
+  mut t = pool.spawn(fetch_page, url)     # -> AsyncTask, runs immediately
+  t.join()                                # cross-thread join, like Thread.join()
+  ```
+  `AsyncPool.spawn` is Sendable-checked at compile time exactly like
+  `spawn`/`Thread.spawn`/`ThreadPool.spawn` (`[T-1]`/`[T-2]`/`[T-7]`), since a
+  submitted task's captured state may run on a different worker than the one
+  that submitted it — zero runtime cost, the same mechanism Rust's `Future:
+  Send` bound enforces for `tokio::spawn`. See `std/async/pool.tr`.
+- **`await_all(f1(), f2(), ...)` now runs on the `AsyncPool` above instead of
+  spawning one raw OS thread per sub-call.** Previously a large `await_all`
+  batch (e.g. 300 simultaneous sub-calls) spawned 300 real OS threads;
+  verified this now stays bounded near the machine's core count for the same
+  workload, with no change to `await_all`'s syntax, semantics, or existing
+  Sendable checking on its arguments.
 - Bidirectional FFI / library export: an `export def` function is given C-ABI
   external linkage (`__declspec(dllexport)` on Windows, default visibility on
   ELF/Mach-O via the new `TR_EXPORT` macro). The new `tauraroc --lib` mode

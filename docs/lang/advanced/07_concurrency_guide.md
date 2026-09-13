@@ -13,14 +13,16 @@ Tauraro gives you **two execution models** plus a **hybrid** that combines them.
 | **OS threads** | `spawn`, `task_group`, `Thread`, `ThreadPool` | OS preemptive | **Yes** (real cores) | CPU-bound work, blocking calls |
 | **Green threads / async** | `async`/`await`, `Coro` | Cooperative (per worker) | No (one OS thread) | I/O-bound, many connections |
 | **Thread-per-core (hybrid)** | N workers, each a green scheduler + reactor | Preemptive across cores, cooperative within | **Yes** | High-concurrency I/O servers |
+| **Work-stealing pool** | `AsyncPool`, `await_all` | N persistent workers, idle ones steal queued work from busy siblings | **Yes** | Many independent async calls, unpredictable load |
 
 The rule of thumb:
 
 - **CPU-bound** (hashing, math, parsing in a loop) → **OS threads**. They run on separate cores, so you get true parallelism.
 - **I/O-bound** (sockets, lots of waiting) → **async / green threads**. Thousands of tasks share one OS thread; a task that waits on I/O parks and yields instead of blocking the thread.
 - **Both at scale** (a web server) → **thread-per-core async** (e.g. watax `listen_async`): one green-thread scheduler per core, each driving thousands of connections via a non-blocking reactor.
+- **Many independent async calls with an unpredictable/uneven amount of work each** (a batch job, a fan-out of API calls) → **`AsyncPool`** (or `await_all`, which is built on it): a small, core-sized pool of workers where an idle one steals queued work from a busy sibling, so load balances automatically instead of pinning each call to a fixed worker or spawning a thread per call.
 
-> Key fact: in Tauraro, `spawn` and `task_group` create **OS threads** (`_tr_thread_start`), while `await`, `await_all`, and `Coro.spawn` create **green threads** (cooperative coroutines on fibers/`ucontext`). Don't confuse them.
+> Key fact: in Tauraro, `spawn` and `task_group` create **OS threads** (`_tr_thread_start`), while `await`, `Coro.spawn`, and `AsyncPool.spawn` create **green threads** (cooperative coroutines on fibers/`ucontext`). `await_all` and `AsyncPool.spawn` submit those green-thread calls onto a shared, core-sized, work-stealing pool (`AsyncPool`/`_TrDeque`) rather than the plain single-worker scheduler `await` alone uses. Don't confuse any of these.
 
 ---
 
@@ -199,15 +201,34 @@ watax exposes the whole spectrum so you can match the model to the workload:
 
 ---
 
+## Model 4 — work-stealing pool (uneven async workloads)
+
+Thread-per-core (Model 3) is a great fit when work arrives evenly across workers (one accept-loop per worker, roughly equal connection counts). It has no answer for the opposite case: many independent async calls whose individual cost varies, arriving all at once or over time, where a fixed per-worker assignment would leave some workers idle while others fall behind. `AsyncPool` covers that case: N persistent worker threads, each with its own lock-free run queue, where an **idle worker steals a not-yet-started task from a busy sibling's queue** instead of waiting — the same load-balancing model Go's and Tokio's runtimes use.
+
+```tauraro
+mut pool = AsyncPool.auto()             # sized to the machine's cores
+mut t1 = pool.spawn(fetch_page, url1)
+mut t2 = pool.spawn(fetch_page, url2)
+t1.join()                               # blocks the calling thread until done
+t2.join()
+```
+
+`await_all(f1(), f2(), ...)` is built directly on `AsyncPool` — every sub-call is submitted onto the shared pool instead of getting its own OS thread, so a large `await_all` batch (hundreds of simultaneous sub-calls) stays bounded to a handful of worker threads rather than spawning one thread per call. `await_all`'s own syntax, semantics, and Sendable checking are unchanged; only its underlying execution engine changed.
+
+`AsyncPool.spawn`'s argument, like `spawn`/`Thread.spawn`/`ThreadPool.spawn`, must be Sendable (checked at compile time, `[T-1]`/`[T-2]`/`[T-7]`) — the submitted call may end up running on a different worker than the one that called `.spawn`.
+
+---
+
 ## Decision guide
 
 ```
 Is the work mostly waiting on I/O (sockets, pipes)?
 ├── No  (CPU-bound):           OS threads — task_group + Atomic/Mutex; ThreadPool to bound it.
 └── Yes (I/O-bound):
-        Few connections / simple?         async def + await / await_all.
-        Many connections (a server)?      thread-per-core async (listen_async / Coro per conn).
-        Each handler does blocking work?  thread-per-connection (listen_threaded) or a ThreadPool.
+        Few connections / simple?              async def + await.
+        Many independent calls, uneven load?   AsyncPool / await_all (work-stealing).
+        Many connections (a server)?           thread-per-core async (listen_async / Coro per conn).
+        Each handler does blocking work?       thread-per-connection (listen_threaded) or a ThreadPool.
 ```
 
 | Need | Use |

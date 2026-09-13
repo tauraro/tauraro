@@ -1,0 +1,9 @@
+def risky() -> int:
+    raise("boom")
+
+def main():
+    try:
+        mut v = risky()
+        print(v.to_str())
+    except e:
+        print("caught: " + e)

@@ -403,6 +403,8 @@ extend Sema:
         s.globals.insert("RwLock",    Symbol.init("RwLock",    SymbolKind.SClass, box_asttype(AstType.init("RwLock"))))
         s.globals.insert("ThreadPool", Symbol.init("ThreadPool", SymbolKind.SClass, box_asttype(AstType.init("ThreadPool"))))
         s.globals.insert("Thread",     Symbol.init("Thread",     SymbolKind.SClass, box_asttype(AstType.init("Thread"))))
+        s.globals.insert("AsyncPool", Symbol.init("AsyncPool", SymbolKind.SClass, box_asttype(AstType.init("AsyncPool"))))
+        s.globals.insert("AsyncTask", Symbol.init("AsyncTask", SymbolKind.SClass, box_asttype(AstType.init("AsyncTask"))))
         s.globals.insert("Atomic",     Symbol.init("Atomic",     SymbolKind.SClass, box_asttype(AstType.init("Atomic"))))
         s.globals.insert("ThreadLocal", Symbol.init("ThreadLocal", SymbolKind.SClass, box_asttype(AstType.init("ThreadLocal"))))
         s.globals.insert("await_all", Symbol.init("await_all", SymbolKind.SFunction, box_asttype(AstType.init("void"))))
@@ -587,6 +589,7 @@ extend Sema:
         if ty_name == "Atomic" or ty_name == "Mutex" or ty_name == "RwLock": return true
         if ty_name == "Chan" or ty_name == "Channel" or ty_name == "ThreadPool": return true
         if ty_name == "Thread" or ty_name == "ThreadLocal": return true
+        if ty_name == "AsyncPool" or ty_name == "AsyncTask": return true
         if ty_name == "Shared" or ty_name == "Weak": return true   # ref-counted pointers are Sendable
         # Known non-thread-safe collections
         if ty_name == "List" or ty_name == "Vec" or ty_name == "Dict" or ty_name == "Map": return false
@@ -5449,8 +5452,14 @@ extend Sema:
                 # they cannot by themselves corrupt memory.
                 if hobj_ty.name == "Pointer" and method == "write" and not self.in_unsafe:
                     self.error("[P-1] '.write()' on a Pointer mutates raw memory and must be inside an 'unsafe:' block.\n      FIX: Wrap this call in 'unsafe:', e.g.\n          unsafe:\n              ... .write(...) ...")
-                if method == "init" or method == "new":
-                    # Preserve generic args so Vec[T].init(n) keeps the T info
+                if method == "init" or method == "new" or method == "auto":
+                    # Preserve generic args so Vec[T].init(n) keeps the T info.
+                    # `auto` included alongside `init`/`new`: a zero-arg factory
+                    # convenience constructor (`ThreadPool.auto()`/`AsyncPool.auto()`,
+                    # sized to core count) - genuinely missing before (confirmed:
+                    # `ThreadPool.auto()` mis-typed even in the unmodified
+                    # compiler, a real pre-existing bug, not something this
+                    # AsyncPool work introduced), same fix as `init`/`new`.
                     if hobj_ty.name == "void" or hobj_ty.name == "":
                         # Built-in types used as static receivers (e.g. Atomic.new, Thread.new)
                         # resolve to void; recover type from the receiver identifier name.
@@ -5652,6 +5661,32 @@ extend Sema:
                             self.error("[T-7] '" + _psa_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it cannot be passed to ThreadPool.spawn (like Rust's 'Rc' being '!Send').\n      FIX: share it as 'Shared[" + _psa_ty.name + "]' (atomic refcount, like Rust's 'Arc').")
                         self._check_spawn_nested_rc(hl.get(_psi))
                         _psi = _psi + 1
+                # AsyncPool.spawn arg Sendable check - identical reasoning to
+                # ThreadPool.spawn: the submitted call may run on ANY pool
+                # worker (including, after a steal, one different from
+                # whichever thread called .spawn), so its captured/passed
+                # state must be provably safe to touch from another thread,
+                # checked once at compile time - zero runtime cost, same
+                # mechanism Rust's `Future: Send` bound enforces for
+                # `tokio::spawn`.
+                elif method == "spawn" and hobj_ty.name == "AsyncPool":
+                    ret_ty = AstType.init("AsyncTask")
+                    mut _asi = 1
+                    while _asi < hl.len:
+                        if self.expr_is_borrow(hl.get(_asi)):
+                            self.error("[T-6] a borrow (`ref`/`mut ref`) cannot be passed to AsyncPool.spawn: the borrowed value may be mutated or freed by another thread, or outlive its source.\n      FIX: pass an owned value, a `Shared[T]`, or a `Mutex[T]`/`Atomic[T]` handle instead of a borrow.")
+                        mut _asa_ty = hir_expr_type(hl.get(_asi))
+                        if not self.is_sendable_ty(_asa_ty):
+                            self.error("[T-1] Type '" + _asa_ty.name + "' is not Sendable and cannot be passed to AsyncPool.spawn.\n      FIX: Wrap in Mutex[" + _asa_ty.name + "] for exclusive access, or add 'implements Sendable' to '" + _asa_ty.name + "' to confirm it is thread-safe.")
+                        elif self.strict_mode and self._is_rc_class(_asa_ty.name) and not self._expr_is_shared(hl.get(_asi)) and not self._is_unsafe_sendable(_asa_ty.name):
+                            self.error("[T-7] '" + _asa_ty.name + "' is a plain reference-counted class — its refcount is thread-local (non-atomic), so it cannot be passed to AsyncPool.spawn (like Rust's 'Rc' being '!Send'): the task may run on a different worker than the one that submitted it.\n      FIX: share it as 'Shared[" + _asa_ty.name + "]' (atomic refcount, like Rust's 'Arc').")
+                        self._check_spawn_nested_rc(hl.get(_asi))
+                        _asi = _asi + 1
+                # AsyncTask built-in method return types
+                elif hobj_ty.name == "AsyncTask":
+                    if method == "join": ret_ty = AstType.init("void")
+                    elif method == "done": ret_ty = AstType.init("bool")
+                    elif method == "free": ret_ty = AstType.init("void")
                 # Atomic built-in method return types
                 elif hobj_ty.name == "Atomic":
                     if method == "load" or method == "get" or method == "add" or method == "sub" or method == "swap" or method == "exchange" or method == "fetch_add" or method == "fetch_sub" or method == "load_relaxed" or method == "load_acquire" or method == "load_seqcst" or method == "add_relaxed" or method == "add_release" or method == "add_acqrel" or method == "sub_relaxed" or method == "sub_release":
@@ -5749,7 +5784,7 @@ extend Sema:
                 elif self.classes.contains(hobj_ty.name):
                     mut _cls = self.classes.get(hobj_ty.name)
                     mut _hty_n = hobj_ty.name
-                    mut _is_builtin_dispatch = _hty_n == "Thread" or _hty_n == "Atomic" or _hty_n == "ThreadLocal" or _hty_n == "ThreadPool" or _hty_n == "Mutex" or _hty_n == "RwLock" or _hty_n == "Chan" or _hty_n == "Channel" or _hty_n == "Shared" or _hty_n == "Weak" or _hty_n == "StringBuilder" or _hty_n == "OS" or _hty_n == "Process" or _hty_n == "Env" or _hty_n == "Hash" or _hty_n == "File"
+                    mut _is_builtin_dispatch = _hty_n == "Thread" or _hty_n == "Atomic" or _hty_n == "ThreadLocal" or _hty_n == "ThreadPool" or _hty_n == "Mutex" or _hty_n == "RwLock" or _hty_n == "Chan" or _hty_n == "Channel" or _hty_n == "Shared" or _hty_n == "Weak" or _hty_n == "StringBuilder" or _hty_n == "OS" or _hty_n == "Process" or _hty_n == "Env" or _hty_n == "Hash" or _hty_n == "File" or _hty_n == "AsyncPool" or _hty_n == "AsyncTask"
                     if not _is_builtin_dispatch and not self.class_method_exists(hobj_ty.name, method) and not self.is_universal_method(method):
                         self.error("[E-1] No method '" + method + "' found on type '" + hobj_ty.name + "'.\n      FIX: Define 'pub def " + method + "(self, ...)' in '" + hobj_ty.name + "' or its base class via 'extend " + hobj_ty.name + ":'.")
                     mut _mi = 0
@@ -6520,6 +6555,7 @@ extend Sema:
         if name == "Vec" or name == "List" or name == "Map" or name == "Dict" or name == "Set" or name == "Box" or name == "Tuple" or name == "tuple" or name == "Pointer": return true
         if name == "Mutex" or name == "RwLock" or name == "Atomic" or name == "Shared" or name == "Weak" or name == "Option" or name == "Result" or name == "Chan" or name == "Channel": return true
         if name == "Thread" or name == "ThreadPool" or name == "ThreadLocal" or name == "Coro": return true
+        if name == "AsyncPool" or name == "AsyncTask": return true
         # Builtin module-static receivers: recognized by NAME (the compiler special-cases
         # `OS.is_windows()`, `Process.system()`, `Env.get_var()`, etc.). Some are std
         # `pub class`es whose def isn't registered in self.classes for a given unit and
@@ -6545,6 +6581,7 @@ extend Sema:
         if name == "Chan" or name == "Channel": return true
         if name == "Mutex" or name == "RwLock" or name == "Atomic": return true
         if name == "Thread" or name == "ThreadPool" or name == "ThreadLocal": return true
+        if name == "AsyncPool" or name == "AsyncTask": return true
         if name == "Pointer": return true
         # Gap 4: 'ref T' and 'mut ref T' params are borrow annotations, not owning values
         if name == "ref" or name == "mut_ref": return true

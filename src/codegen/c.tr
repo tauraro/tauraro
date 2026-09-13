@@ -719,6 +719,8 @@ pub class CGenerator:
         if n == "RwLock": return "_TrRWLBox*"
         if n == "ThreadPool": return "_TrThreadPool*"
         if n == "Thread": return "_TrThreadObj*"
+        if n == "AsyncPool": return "_TrAsyncPool*"
+        if n == "AsyncTask": return "_TrAsyncTask*"
         if n == "Atomic": return "_TrAtomic*"
         if n == "ThreadLocal": return "_TrTLS*"
         if n == "Shared": return "_TrSharedBox*"
@@ -1934,6 +1936,8 @@ pub class CGenerator:
         if name == "Chan": return true
         if name == "ThreadPool": return true
         if name == "ThreadLocal": return true
+        if name == "AsyncPool": return true
+        if name == "AsyncTask": return true
         return false
 
     # Like get_inline_attrs but without `static` - for cross-module prototypes in tauraro_types.h.
@@ -3310,25 +3314,23 @@ pub class CGenerator:
                 return "_tr_obj_retain(" + s + ")"
             case HirExpr.EPropAccess(_, _, _):
                 return "_tr_obj_retain(" + s + ")"
-            # A heap-class element read out of a `List[T]`/`Vec[T]` via `coll[i]` is an
-            # ALIAS into that collection's own owned storage, exactly like EIdent/
-            # EPropAccess above — not a fresh, already-rc=1 value. Without this, storing
-            # `coll[i]` into another longer-lived container (`.append()`, a dict value, a
-            # Set.add, a list literal element, an assignment, a `mut x = coll[i]` local,
-            # or a `return coll[i]`) under-counts the reference: the new holder treats
-            # itself as owning rc=1 it never actually incremented, so when EITHER the
-            # source collection's element is dropped (e.g. its own tree is torn down and
-            # rebuilt) OR the new holder's copy is dropped, the other is left pointing at
-            # freed/reused memory (double-free / use-after-free depending on drop order).
-            # Found via nebula's `toolkit/ui/interp.tr` `Interpreter.emit()`: the overlay
-            # feature was the first call site anywhere that stores a `box.children[i]`
-            # read out of a live `List[LayoutBox]` into a second, longer-lived
-            # `List[LayoutBox]` field (`self.overlays.append(box.children[i])`) — every
-            # prior use of a collection-index read in this codebase was transient
-            # (passed straight into a same-call function argument, never stored), so
-            # this gap in the retain-on-store inference was never exercised before.
-            case HirExpr.EIndex(_, _, _):
-                return "_tr_obj_retain(" + s + ")"
+            # NOTE: `coll[i]` (EIndex) is deliberately NOT retained here, matching the
+            # EXISTING precedent for `coll.get(i)`/`.first()`/`.last()` (EMethodCall,
+            # see _obj_expr_owns_ref/_obj_store_needs_retain below): a bare collection-
+            # element read is treated as a zero-cost BORROW everywhere by default — the
+            # overwhelmingly common case (toolkit/ui/interp.tr's hit_test/emit/
+            # cursor_kind_at alone have 14+ `mut c = box.children[i]`-shaped locals, all
+            # transient: fields read or passed BY REFERENCE into a recursive call, never
+            # stored). Retaining unconditionally here once regressed exactly those sites
+            # (a leaked, never-released reference: _obj_expr_owns_ref has no EIndex case,
+            # so a local bound this way is never registered in class_local_names, so
+            # scope-exit auto-drop never releases the retain this would add — verified by
+            # re-deriving the fix and finding the leak before shipping it). The STORE
+            # side (`.append()`, a dict value, Set.add, a list-literal element — see
+            # _obj_store_needs_retain's own EIndex case) is where a genuine gap existed
+            # and is fixed instead: only a value that's actually being handed to a
+            # longer-lived container needs its own retain; a value merely bound to a
+            # local and read/forwarded needs none, exactly like `.get(i)` already works.
             case _:
                 return s
 
@@ -3415,6 +3417,28 @@ pub class CGenerator:
         match e.read():
             case HirExpr.EIdent(_, _, _): return false
             case HirExpr.EPropAccess(_, _, _): return false
+            # `coll[i]` is a heap-class ALIAS into that collection's own owned storage —
+            # exactly the same "borrowed element read" as `coll.get(i)`/.first()/.last()
+            # just below, which this call site already retains-on-store. The subscript
+            # SYNTAX form (EIndex) of the identical operation had no case here and fell
+            # to the catch-all `false` at the bottom of this match, silently skipping the
+            # retain whenever a `coll[i]` read (rather than `coll.get(i)`) was stored into
+            # a longer-lived container. Found via nebula's `toolkit/ui/interp.tr`
+            # `Interpreter.emit()`: `self.overlays.append(box.children[i])` stores a
+            # `List[LayoutBox]` element read via `[i]` into a second, longer-lived
+            # `List[LayoutBox]` field without retaining, so releasing either the source
+            # tree or `self.overlays` frees the shared LayoutBox out from under the
+            # other — a double-free/use-after-free, observed as `_trdrop_LayoutBox`
+            # "memory access out of bounds" under the arena allocator (no real free(),
+            # so corruption only surfaces once the arena reuses those exact bytes).
+            # NOTE: this is the STORE-side fix only — obj_retain_wrap deliberately does
+            # NOT retain a bare `coll[i]` read (see its own comment): retaining there
+            # unconditionally regressed the far more common transient/borrow case (a
+            # `mut c = box.children[i]` local that's only read or forwarded by reference,
+            # e.g. hit_test's own `mut oc = box.children[oi]`), since _obj_expr_owns_ref
+            # has no EIndex case either and never registers such a local for scope-exit
+            # release — an unpaired retain leaked on every ordinary tree walk.
+            case HirExpr.EIndex(_, _, _): return true
             case HirExpr.ECall(callee, _, _):
                 match callee.read():
                     case HirExpr.EIdent(cn, _, _):
@@ -4089,10 +4113,18 @@ pub class CGenerator:
         if base_callee == "type":
             return "\"<object>\""
 
-        # await_all(f1(args), f2(args), ...) - run all calls concurrently, wait for completion
+        # await_all(f1(args), f2(args), ...) - run all calls concurrently, wait
+        # for completion. Each sub-call is submitted onto the shared,
+        # core-sized, work-stealing AsyncPool (_tr_atg_spawn) rather than
+        # spawning one throwaway OS thread per call (_tr_thread_start) -
+        # unbounded before this (1000 sub-calls = 1000 OS threads), now a
+        # small reused worker pool. Sendable checking on every sub-call's
+        # args (sema.tr) is unchanged and still gates this, since crossing
+        # into the pool is exactly the same kind of thread boundary as
+        # crossing into a raw OS thread was.
         if base_callee == "await_all":
             if args.len == 0: return "0LL"
-            mut aa_code = "({ _tr_tg_begin(); "
+            mut aa_code = "({ _tr_atg_begin(); "
             mut aa_i = 0
             while aa_i < args.len:
                 mut aa_fn = ""
@@ -4106,13 +4138,13 @@ pub class CGenerator:
                     case _: pass
                 if aa_fn != "":
                     if aa_call_args.len == 0:
-                        aa_code = aa_code + "_tr_tg_push(_tr_thread_start(_tr_spawn_wrap_" + aa_fn + ", NULL)); "
+                        aa_code = aa_code + "_tr_atg_spawn(_tr_spawn_wrap_" + aa_fn + ", NULL); "
                     elif aa_call_args.len == 1:
                         mut aa_aty = hir_expr_type(aa_call_args.get(0)).name
                         mut aa_vcast = "(void*)(uintptr_t)(" + self.gen_expr(aa_call_args.get(0)) + ")"
                         if not _is_int_type(aa_aty) and aa_aty != "bool" and aa_aty != "char":
                             aa_vcast = "(void*)(" + self.gen_expr(aa_call_args.get(0)) + ")"
-                        aa_code = aa_code + "_tr_tg_push(_tr_thread_start(_tr_spawn_wrap_" + aa_fn + ", " + aa_vcast + ")); "
+                        aa_code = aa_code + "_tr_atg_spawn(_tr_spawn_wrap_" + aa_fn + ", " + aa_vcast + "); "
                     else:
                         # multi-arg: heap-pack
                         mut aa_na = aa_call_args.len
@@ -4125,11 +4157,11 @@ pub class CGenerator:
                             else:
                                 aa_code = aa_code + "_aab" + str(aa_i) + "[" + str(aa_ai2 + 1) + "] = (long long)(" + self.gen_expr(aa_call_args.get(aa_ai2)) + "); "
                             aa_ai2 = aa_ai2 + 1
-                        aa_code = aa_code + "_tr_tg_push(_tr_thread_start(_tr_spawn_wrap_" + aa_fn + ", _aab" + str(aa_i) + ")); } "
+                        aa_code = aa_code + "_tr_atg_spawn(_tr_spawn_wrap_" + aa_fn + ", _aab" + str(aa_i) + "); } "
                 else:
                     aa_code = aa_code + self.gen_expr(args.get(aa_i)) + "; "
                 aa_i = aa_i + 1
-            aa_code = aa_code + "_tr_taskgroup_wait(); 0LL; })"
+            aa_code = aa_code + "_tr_atg_wait(); 0LL; })"
             return aa_code
 
         # iter / enumerate / sorted / reversed - identity for now
@@ -5362,6 +5394,56 @@ pub class CGenerator:
                     return "_tr_threadpool_spawn(" + obj_s + ", (void*(*)(void*))(" + tp_fn2_s + "), NULL)"
             if method == "wait": return "_tr_threadpool_wait(" + obj_s + ")"
             if method == "free": return "_tr_threadpool_free(" + obj_s + ")"
+
+        # AsyncPool method dispatch - work-stealing pool for top-level async
+        # calls (see runtime/tauraro_rt.h's _TrAsyncPool). Same shape as
+        # ThreadPool above (submits fn+arg, returns a handle to join later),
+        # but fn runs as a coroutine on whichever worker steals/dequeues it,
+        # so fn's OWN internal `await`s work correctly, and N calls share a
+        # small, reused, core-sized pool instead of one OS thread each.
+        if t_n == "AsyncPool" or obj_s == "AsyncPool":
+            if method == "new":
+                mut ap_nw = "4LL"
+                if args.len > 0: ap_nw = self.gen_expr(args.get(0))
+                return "_tr_asyncpool_new(" + ap_nw + ")"
+            if method == "auto":
+                return "_tr_asyncpool_new(_tr_threadpool_auto_n())"
+            if method == "spawn":
+                # AsyncPool.spawn(fn, arg) -> AsyncTask - submit a not-yet-started
+                # top-level async call onto the pool's work-stealing queues.
+                if args.len >= 2:
+                    mut ap_fn_s = self.gen_expr(args.get(0))
+                    mut ap_fn_nm = ""
+                    match args.get(0).read():
+                        case HirExpr.EIdent(apn, _, _): ap_fn_nm = apn
+                        case _: pass
+                    mut ap_arg_s = "(void*)(" + self.gen_expr(args.get(1)) + ")"
+                    mut ap_aty = hir_expr_type(args.get(1)).name
+                    if _is_int_type(ap_aty) or ap_aty == "bool" or ap_aty == "char":
+                        ap_arg_s = "(void*)(uintptr_t)(" + self.gen_expr(args.get(1)) + ")"
+                    if ap_fn_nm != "":
+                        return "_tr_asyncpool_spawn(" + obj_s + ", _tr_spawn_wrap_" + ap_fn_nm + ", " + ap_arg_s + ")"
+                    return "_tr_asyncpool_spawn(" + obj_s + ", (void*(*)(void*))(" + ap_fn_s + "), " + ap_arg_s + ")"
+                elif args.len == 1:
+                    mut ap_fn2_s = self.gen_expr(args.get(0))
+                    mut ap_fn2_nm = ""
+                    match args.get(0).read():
+                        case HirExpr.EIdent(apn2, _, _): ap_fn2_nm = apn2
+                        case _: pass
+                    if ap_fn2_nm != "":
+                        return "_tr_asyncpool_spawn(" + obj_s + ", _tr_spawn_wrap_" + ap_fn2_nm + ", NULL)"
+                    return "_tr_asyncpool_spawn(" + obj_s + ", (void*(*)(void*))(" + ap_fn2_s + "), NULL)"
+            if method == "free": return "_tr_asyncpool_free(" + obj_s + ")"
+
+        # AsyncTask method dispatch - handle returned by AsyncPool.spawn.
+        # `.join()` is a cross-OS-thread join (blocks the calling thread
+        # until the task completes), matching Thread.join()/ThreadPool.wait()'s
+        # existing precedent rather than a new non-blocking mechanism. Named
+        # `join`, not `await`, since `await` is a language keyword.
+        if t_n == "AsyncTask" or obj_s == "AsyncTask":
+            if method == "join": return "_tr_asynctask_await(" + obj_s + ")"
+            if method == "done": return "_tr_asynctask_done(" + obj_s + ")"
+            if method == "free": return "_tr_asynctask_free(" + obj_s + ")"
 
         # Thread method dispatch - Thread.spawn(fn, arg), t.join(), t.detach(), Thread.sleep(ms), Thread.id()
         if t_n == "Thread" or obj_s == "Thread":
@@ -7351,8 +7433,12 @@ pub class CGenerator:
                                 self.w("    " + th_ps_fn + "(" + th_ps_cs + ");\n")
                                 self.w("    free(_ab); return NULL;\n")
                                 self.w("}\n")
-                # Emit spawn wrappers for pool.spawn(fn, args...) calls
-                if pool_meth == "spawn" and hir_expr_type(pool_obj).name == "ThreadPool":
+                # Emit spawn wrappers for pool.spawn(fn, args...) calls - shared by
+                # ThreadPool (raw OS threads) and AsyncPool (work-stealing pool):
+                # the wrapper itself is identical either way (call fn, discard/box
+                # its result, return NULL/boxed void*) - only the SUBMISSION call
+                # differs (_tr_threadpool_spawn vs _tr_asyncpool_spawn, below).
+                if pool_meth == "spawn" and (hir_expr_type(pool_obj).name == "ThreadPool" or hir_expr_type(pool_obj).name == "AsyncPool"):
                     if pool_args.len >= 1:
                         # Build a synthetic ECall with fn as callee and remaining args as args
                         mut sp_fn_nm = ""
@@ -9928,6 +10014,7 @@ pub class CGenerator:
 
         self.w("#ifndef TAURARO_BARE\n")
         self.w("    _tr_async_pool_shutdown();\n")
+        self.w("    _tr_asyncpool_default_shutdown();\n")
         self.w("#endif\n")
         self.w("    return 0;\n}\n")
 
@@ -10815,6 +10902,7 @@ pub class CGenerator:
 
         self.w("#ifndef TAURARO_BARE\n")
         self.w("    _tr_async_pool_shutdown();\n")
+        self.w("    _tr_asyncpool_default_shutdown();\n")
         self.w("#endif\n")
         self.w("    return 0;\n}\n")
         self.flush_closures()
