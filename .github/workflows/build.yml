@@ -571,6 +571,151 @@ jobs:
           path: tauraroc-${{ matrix.platform }}.sha256
 
   # -----------------------------------------------------------------
+  # Termux / Android build: a STATICALLY-linked aarch64 Linux binary.
+  #
+  # Why this needs its own job instead of just using the linux-arm64 matrix
+  # artifact above: that build is dynamically linked against Ubuntu's own
+  # glibc, with a hardcoded ELF PT_INTERP pointing at Ubuntu's dynamic linker
+  # path (e.g. /lib/ld-linux-aarch64.so.1). Termux's filesystem is entirely
+  # under /data/data/com.termux/files/usr — there is no /lib/ld-linux-...
+  # there, so the dynamically-linked binary fails with exactly the
+  # "linker/loader" errors this job exists to fix. A `-static` build has NO
+  # PT_INTERP at all, so it runs on any compatible-kernel aarch64 Linux
+  # userspace (Termux/Android included) regardless of filesystem layout.
+  #
+  # Why NOT musl (zig's usual cross-compile path) and NOT zig at all:
+  #   - musl lacks full `ucontext.h` (makecontext/swapcontext) support, which
+  #     the coroutine/green-thread scheduler needs — see scripts/build.sh's
+  #     own comment ("musl lacks ucontext functions needed by the coroutine
+  #     scheduler"), a constraint already hit and documented in this repo.
+  #   - zig explicitly refuses to static-link glibc (see this file's own
+  #     "Cross-compile via bundled zig" step comment) — so `--target
+  #     aarch64-linux-musl --static` and glibc-static are mutually exclusive
+  #     via zig specifically.
+  # The fix already proven elsewhere in THIS file: `scripts/cross_check.sh`'s
+  # part A already builds a real program with plain `aarch64-linux-gnu-gcc
+  # -static` (full glibc, no zig) and runs it under qemu — regular GNU
+  # gcc/glibc has no such static-link restriction. This job applies that
+  # exact same approach to build tauraroc ITSELF, natively, on a real aarch64
+  # runner (no cross-compiler needed at all, since ubuntu-22.04-arm already
+  # IS aarch64) — simpler and less risky than cross-compiling the whole
+  # self-hosted compiler from a foreign host arch.
+  # -----------------------------------------------------------------
+  build-termux-android:
+    needs: build
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download linux-arm64 bootstrap artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tauraroc-linux-arm64
+          path: bootstrap-seed/
+
+      - name: Build statically-linked aarch64 tauraroc
+        shell: bash
+        env:
+          CC: "gcc"
+          CFLAGS: "-O2 -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700"
+          LDFLAGS: "-lm -lpthread -lrt"
+          # TAURARO_STATIC (scripts/build.sh): passes --static to tauraroc
+          # itself, so the produced binary has no ELF PT_INTERP at all —
+          # this is the entire fix for Termux's "linker/loader issues".
+          TAURARO_STATIC: "1"
+        run: |
+          set -e
+          chmod +x bootstrap-seed/tauraroc
+          BOOTSTRAP_BIN="$(pwd)/bootstrap-seed/tauraroc" bash scripts/build.sh
+          mv tauraroc tauraroc-android-arm64
+
+      - name: Verify the binary is actually static (no dynamic-linker dependency)
+        shell: bash
+        run: |
+          set -e
+          file tauraroc-android-arm64
+          # A genuinely static ELF has no INTERP program header and `ldd`
+          # refuses/reports "not a dynamic executable" — either phrasing is
+          # fine, but it must NOT list resolved .so paths (that would mean
+          # the exact Ubuntu-vs-Termux path mismatch this job exists to avoid).
+          if ldd tauraroc-android-arm64 2>&1 | grep -q "=>"; then
+            echo "FAIL: binary is dynamically linked (found resolved .so dependencies)"
+            ldd tauraroc-android-arm64
+            exit 1
+          fi
+          echo "OK: no dynamic dependencies — safe to run under Termux's own filesystem layout"
+
+      - name: Run regression test suite against the static binary
+        shell: bash
+        env:
+          # Test PROGRAMS compiled along the way don't need to be static
+          # themselves (they run immediately, right here on ubuntu-22.04-arm,
+          # not shipped anywhere) - only tauraroc-android-arm64 itself does.
+          CC: "gcc"
+          CFLAGS: "-O2 -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700"
+          LDFLAGS: "-lm -lpthread -lrt"
+        run: |
+          BOOTSTRAP_BIN="$(pwd)/tauraroc-android-arm64" bash scripts/run_tests.sh
+
+      # -------------------------------------------------------
+      # Bundle zig, same as the main build job (and same cache key -
+      # "linux-arm64"'s zig is aarch64, the exact arch this job runs on, so
+      # this normally CACHE-HITS the copy the main `build` job's own
+      # ubuntu-22.04-arm leg already populated, no second ~200 MB download).
+      # Without this, tauraroc-android-arm64 would have no --backend llvm
+      # and no --target cross-compilation at all inside Termux, since
+      # Termux ships neither a system clang/llvm nor per-target sysroots by
+      # default - `zig cc` is what makes both self-contained. zig's own
+      # official Linux releases are static (musl-linked) binaries, so the
+      # bundled zig itself has the same "runs under Termux" property this
+      # whole job is built around for tauraroc.
+      # -------------------------------------------------------
+      - name: Cache bundled zig
+        id: cache-zig
+        uses: actions/cache@v4
+        with:
+          path: zig
+          key: zig-0.16.0-linux-arm64
+      - name: Bundle zig toolchain
+        if: steps.cache-zig.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -e
+          ZV=0.16.0
+          curl -fsSL --retry 5 --retry-delay 3 "https://ziglang.org/download/$ZV/zig-aarch64-linux-$ZV.tar.xz" -o z.tar.xz
+          mkdir -p zig
+          tar -xJf z.tar.xz --strip-components=1 -C zig
+          rm -f z.tar.xz
+      - name: Verify bundled zig runs on this (aarch64) runner
+        shell: bash
+        run: |
+          ./zig/zig version
+          printf 'int main(void){return 0;}\n' > _z.c
+          ./zig/zig cc -target aarch64-linux-musl -c _z.c -o _z.o && echo "zig codegen OK"
+          rm -f _z.c _z.o
+
+      - name: Generate SHA256 checksum
+        shell: bash
+        run: |
+          sha256sum tauraroc-android-arm64 > tauraroc-android-arm64.sha256
+          cat tauraroc-android-arm64.sha256
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauraroc-android-arm64
+          if-no-files-found: error
+          path: |
+            tauraroc-android-arm64
+            tauraroc-android-arm64.sha256
+            zig/
+            src/
+            std/
+            runtime/
+            examples/
+
+  # -----------------------------------------------------------------
   # Benchmarks: run the C vs Rust vs Tauraro suite (time + peak memory)
   # on Linux after the build, then commit the Markdown report to
   # benchmarks/results.md. Per request: results are NOT uploaded as an
