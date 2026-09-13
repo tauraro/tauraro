@@ -2974,6 +2974,26 @@ static _TrExcChain* _tr_exc_chain_get(void) {
     if (!_tr_root_exc_chain) _tr_root_exc_chain = _tr_excchain_new();
     return _tr_root_exc_chain;
 }
+
+/* BARE/WASM AsyncPool/AsyncTask: no coroutines, no OS threads - every
+ * submitted call just runs synchronously in place, exactly like
+ * `_TrThreadPool`'s own BARE stub above (`_tr_threadpool_spawn` calling
+ * `fn(arg)` directly). The real, work-stealing versions of these types
+ * live inside the `#if !defined(TAURARO_BARE) && !defined(TAURARO_WASM)`
+ * coroutine section below; this stub exists so code that references them
+ * UNCONDITIONALLY (`_TrAsyncTaskGroup`/`_tr_atg_*`, which back `await_all`
+ * and must compile in every configuration) still has something to link
+ * against on a target with no coroutine/thread support at all. */
+typedef struct { int _dummy; } _TrAsyncTask;
+typedef struct { int _dummy; } _TrAsyncPool;
+static _TrAsyncPool* _tr_asyncpool_new(long long n) { (void)n; return (_TrAsyncPool*)TAURARO_CALLOC(1, sizeof(_TrAsyncPool)); }
+static _TrAsyncTask* _tr_asyncpool_spawn(_TrAsyncPool* p, void*(*fn)(void*), void* arg) { (void)p; fn(arg); return NULL; }
+static long long _tr_asynctask_await(_TrAsyncTask* t) { (void)t; return 0; }
+static int _tr_asynctask_done(_TrAsyncTask* t) { (void)t; return 1; }
+static void _tr_asynctask_free(_TrAsyncTask* t) { (void)t; }
+static void _tr_asyncpool_free(_TrAsyncPool* p) { if (p) TAURARO_FREE(p); }
+static _TrAsyncPool* _tr_asyncpool_default(void) { return NULL; }
+static void _tr_asyncpool_default_shutdown(void) { }
 #endif
 
 #if !defined(TAURARO_BARE) && !defined(TAURARO_WASM)

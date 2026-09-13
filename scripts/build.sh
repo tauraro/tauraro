@@ -13,6 +13,16 @@ fi
 # Remove the ARM64 musl wrapper - use native glibc GCC instead
 # (musl lacks ucontext functions needed by the coroutine scheduler)
 STATIC_FLAG=""
+# Opt-in: TAURARO_STATIC=1 statically links the produced tauraroc binary
+# itself (real glibc, NOT musl — musl lacks ucontext, see above) via
+# tauraroc's own `--static` flag. Used by the Termux/Android CI job: a
+# static binary has no ELF PT_INTERP, so it has no dynamic-linker-path
+# dependency at all, sidestepping the "wrong ld.so path" class of failure
+# a dynamically-linked build hits on Termux's non-standard filesystem
+# layout (everything under /data/data/com.termux/files/usr).
+if [ -n "${TAURARO_STATIC:-}" ]; then
+    STATIC_FLAG="--static"
+fi
 
 # For Linux, ensure -std=gnu11 and -D_GNU_SOURCE for ucontext
 if [ "$(uname -s)" = "Linux" ]; then
@@ -23,10 +33,23 @@ if [ "$(uname -s)" = "Linux" ]; then
         chmod +x "$HOME/.local/bin/gcc"
     fi
     export PATH="$HOME/.local/bin:$PATH"
-    # Use native glibc GCC on all Linux platforms
-    export CC="gcc"
-    export CFLAGS="-O2 -std=gnu11 -D_GNU_SOURCE"
-    export LDFLAGS="-lm -lpthread"
+    if [ -n "${TAURARO_STATIC:-}" ]; then
+        # Termux/Android static build only: respect the CI job's own
+        # CC/CFLAGS/LDFLAGS (it sets _XOPEN_SOURCE=700 and -lrt) instead of
+        # the hardcoded defaults below. Scoped to this opt-in path so every
+        # OTHER job's behavior (which relied on the unconditional overwrite
+        # below, even though it also sets its own env: block) is completely
+        # unchanged.
+        : "${CC:=gcc}"
+        : "${CFLAGS:=-O2 -std=gnu11 -D_GNU_SOURCE -D_XOPEN_SOURCE=700}"
+        : "${LDFLAGS:=-lm -lpthread -lrt}"
+        export CC CFLAGS LDFLAGS
+    else
+        # Use native glibc GCC on all Linux platforms.
+        export CC="gcc"
+        export CFLAGS="-O2 -std=gnu11 -D_GNU_SOURCE"
+        export LDFLAGS="-lm -lpthread"
+    fi
 fi
 
 echo "==> Compiling src/main.tr → ./tauraroc"
