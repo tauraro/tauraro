@@ -3030,6 +3030,14 @@ typedef struct _TrCoro {
     struct _TrCoro*  next;        /* ready-queue link                       */
     struct _TrCoro*  snext;       /* sleep-list link                        */
     _TrExcChain*     exc_chain;   /* shared with every coro in this await-chain */
+    /* Set instead of completing normally when an uncaught exception needs
+     * to unwind into a handler owned by a DIFFERENT coroutine (or the root)
+     * - see _tr_exc_raise's cross-coroutine branch. Never transitions to
+     * _TRC_DONE; this coroutine is deliberately abandoned (see that
+     * function's comment on the resulting resource leak, a known, accepted
+     * tradeoff vs. the alternative of a fiber-boundary-crossing longjmp). */
+    int              failed;
+    char*            fail_msg;
 } _TrCoro;
 
 typedef struct {
@@ -3359,22 +3367,40 @@ static int _tr_co_await_fd(int fd, unsigned int events) {
     return 1;
 }
 
+/* Forward declaration: defined much later in the file (needs _TrExcChain's
+ * accessor machinery), but _tr_co_await needs to call it - see the
+ * "target->failed" checks below, part of the fiber-safe cross-coroutine
+ * exception unwind (no cross-fiber longjmp; see _tr_exc_raise's own
+ * comment on why and how). */
+_TR_XLINK void _tr_exc_raise(char* msg);
+
 /* Await another coroutine's completion and return its result. Works both
  * inside a coro (cooperative suspend) and from the top level (pumps the
  * scheduler until the target finishes). */
 static long long _tr_co_await(_TrCoro* target) {
     if (!target) return 0;
     if (_tr_g.current) {
-        if (target->state != _TRC_DONE) {
+        if (target->state != _TRC_DONE && !target->failed) {
             target->joiner = _tr_g.current;
             _tr_g.current->state = _TRC_SUSP;
             _tr_co_to_sched(_tr_g.current);
         }
+        /* `target` failed (raised, uncaught within its own body) rather
+         * than completing normally: re-raise HERE, now that we are
+         * genuinely executing on OUR OWN fiber (having just resumed via
+         * the ordinary, safe suspend/resume path above, or never having
+         * suspended at all if `target` had already failed before we even
+         * got here) - a same-fiber longjmp from this point is always safe,
+         * exactly like the plain synchronous (non-coroutine) case. If we
+         * don't own the top handler either, this call's own cross-
+         * coroutine branch continues the same hand-off one hop further. */
+        if (target->failed) _tr_exc_raise(target->fail_msg);
         return target->result;
     }
-    while (target->state != _TRC_DONE) {
+    while (target->state != _TRC_DONE && !target->failed) {
         if (!_tr_sched_step()) break;
     }
+    if (target->failed) _tr_exc_raise(target->fail_msg);
     return target->result;
 }
 
@@ -3400,10 +3426,11 @@ static int _tr_co_await_timeout(_TrCoro* target, long long ms, long long* out) {
         return 1;
     }
     long long deadline = _tr_mono_ms() + ms;
-    while (target->state != _TRC_DONE) {
+    while (target->state != _TRC_DONE && !target->failed) {
         if (_tr_mono_ms() >= deadline) { if (out) *out = 0; return 0; }
         if (!_tr_sched_step()) break;
     }
+    if (target->failed) _tr_exc_raise(target->fail_msg);
     if (out) *out = target->result;
     return target->state == _TRC_DONE;
 }
@@ -4031,26 +4058,88 @@ static void _tr_exc_pop(void) {
 _TR_XLINK void _tr_exc_raise(char* msg) {
     _TrExcChain* ch = _tr_exc_chain_get();
     if (ch->sp > 0) {
+#ifdef _TR_HAS_CORO
+        /* The top handler belongs to `ch->owner[ch->sp - 1]` (the
+         * coroutine - or NULL for plain/root context - that pushed it),
+         * which may differ from whoever is currently raising: `await`ing
+         * a call inside a `try` means the CALLEE raises but the AWAITER
+         * owns the handler.
+         *
+         * If they differ, we must NOT `longjmp` directly into the owner:
+         * on Windows, a raw `longjmp` only restores the stack pointer/
+         * registers - it does NOT call `SwitchToFiber`, so Windows' own
+         * internal "current fiber" bookkeeping (used by every later
+         * SwitchToFiber/GetCurrentFiber/DeleteFiber call) goes stale the
+         * moment execution resumes on a DIFFERENT fiber's stack than the
+         * one Windows still thinks is active - confirmed to crash with
+         * STATUS_INVALID_HANDLE. (POSIX ucontext has no equivalent
+         * bookkeeping, so this specific hazard is Windows-only, but the
+         * fix below is platform-uniform since it never crosses a fiber
+         * boundary via longjmp on ANY platform.)
+         *
+         * Fix: don't jump there directly. Instead, hand off to our OWN
+         * joiner exactly like a normal (successful) coroutine completion
+         * already does - `_tr_co_to_sched` is a plain, symmetric fiber
+         * switch, never a longjmp, so it is always safe. Mark ourselves
+         * `failed` with the message; the joiner (see `_tr_co_await`'s own
+         * `target->failed` check) notices this once it resumes and calls
+         * `_tr_exc_raise` AGAIN - but that second call runs while the
+         * joiner is genuinely executing on ITS OWN fiber, so if it turns
+         * out to own the handler, popping and `longjmp`ing right there is
+         * the ordinary same-fiber case, already proven safe. If the
+         * joiner doesn't own it either, its own call to this same
+         * function repeats the exact same hand-off one hop further -
+         * telescoping outward through the await chain one safe,
+         * already-resumed fiber at a time, never jumping across one. */
+        if (_tr_g.current && ch->owner[ch->sp - 1] != _tr_g.current) {
+            _TrCoro* c = _tr_g.current;
+            c->failed = 1;
+            c->fail_msg = msg;
+            /* If someone formally awaited us (the "inside a coroutine"
+             * branch of `_tr_co_await` sets `target->joiner`), requeue
+             * them so the scheduler redispatches them and they notice
+             * `failed`. A ROOT-level await (main()'s own top-level
+             * `await`, not itself a coroutine) never sets `joiner` at all
+             * - it polls `target->state`/`target->failed` directly in its
+             * own loop instead, so there is nothing to requeue in that
+             * case, but the switch-back below still reaches it: control
+             * returns to whichever `_tr_sched_step()` call dispatched us,
+             * which for a root await is that very polling loop. Either
+             * way, `_tr_co_to_sched` is a plain fiber switch, never a
+             * longjmp, so this hand-off is always safe. */
+            if (c->joiner) {
+                _TrCoro* j = c->joiner;
+                c->joiner = NULL;
+                _tr_rpush(j);
+            }
+            /* KNOWN LIMITATION (pre-existing, not introduced or fixed by
+             * this change): `c` itself is now abandoned rather than freed
+             * - its stack/fiber leaks. Freeing it safely needs a real
+             * unwind-and-cleanup pass, not just this hand-off; out of
+             * scope here since it trades a leak for a crash if gotten
+             * wrong. Separate follow-up work.
+             * A TRULY detached coroutine (`Coro.spawn`, no joiner AND no
+             * root/ancestor loop directly polling it) has no watcher at
+             * all here, so the exception is effectively dropped rather
+             * than escalated - a narrower, accepted tradeoff alongside
+             * the leak above, distinct from the `await` case this fix
+             * targets (which always has SOMEONE polling, joiner or root). */
+            _tr_co_to_sched(c);
+            return; /* only reached if `c` is ever redispatched, which a
+                     * `failed` coroutine never is - defensive only */
+        } else {
+            /* Same-coroutine (or same root, non-coroutine) unwind: the
+             * ordinary, always-safe case - pop and longjmp locally. */
+            ch->sp--;
+            *ch->msgs[ch->sp] = msg;
+            _tr_g.current = ch->owner[ch->sp];
+            longjmp(*ch->bufs[ch->sp], 1);
+        }
+#else
         ch->sp--;
         *ch->msgs[ch->sp] = msg;
-#ifdef _TR_HAS_CORO
-        /* The handler being unwound into belongs to `ch->owner[ch->sp]`
-         * (the coroutine - or NULL for plain/root context - that pushed
-         * it), which may differ from whoever is currently raising (e.g.
-         * `await`ing a call inside a `try`: the callee raises, the
-         * awaiter owns the handler). Restore `_tr_g.current` to that
-         * owner so code running after the jump (the `except:` block, and
-         * anything it itself awaits) sees the correct identity.
-         * KNOWN LIMITATION (pre-existing, not introduced or fixed by this
-         * change): the raising coroutine (and any coroutine between it
-         * and the handler's owner along the await chain) is abandoned
-         * mid-flight by this longjmp rather than freed - its stack/fiber
-         * leaks. Freeing it safely needs a real unwind-and-cleanup pass,
-         * not just an owner pointer; out of scope here since it turns a
-         * leak into a potential crash if gotten wrong. Follow-up work. */
-        _tr_g.current = ch->owner[ch->sp];
-#endif
         longjmp(*ch->bufs[ch->sp], 1);
+#endif
     }
     /* No user try-handler anywhere in this chain: prefer the chain's OWN
      * panic handler if one has been installed (set by a pool worker
@@ -4059,7 +4148,19 @@ _TR_XLINK void _tr_exc_raise(char* msg) {
      * through to the CURRENT OS thread's own panic buf otherwise -
      * unchanged behavior for plain/root-chain code and for a coroutine
      * driven from inside a Thread.spawn'd function via the top-level
-     * `_tr_co_await` pump, exactly as before this whole section existed. */
+     * `_tr_co_await` pump, exactly as before this whole section existed.
+     * NARROWER, STILL-OPEN HAZARD (pre-existing, not touched by this fix):
+     * `_tr_thread_panic_jmpbuf` is captured via `setjmp` on a `Thread.
+     * spawn`'d function's ORIGINAL (pre-fiber-conversion) stack. If a
+     * DETACHED coroutine created from within that function is the one
+     * escalating here (the `ch->has_panic_buf` chain-level check above
+     * covers the common case; this is the thread-local fallback beneath
+     * it), this `longjmp` would cross the same kind of fiber boundary the
+     * rest of this function was rewritten to avoid. Not fixed here: the
+     * reported/reproduced bug this change targets is specifically the
+     * `try`/`except` + `await` case, fully fixed above; this narrower
+     * Thread.spawn+detached-coroutine+panic-buf edge case is a separate,
+     * still-open follow-up. */
     if (ch->has_panic_buf) {
         ch->panic_message = msg;
         longjmp(ch->panic_jmpbuf, 1);
