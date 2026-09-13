@@ -1,0 +1,15 @@
+from std.async.pool import AsyncPool, AsyncTask
+
+class Counter implements Sendable:
+    pub n: int
+
+async def use_it(x: Counter) -> int:
+    return x.n
+
+def main():
+    mut pool = AsyncPool.auto()
+    mut obj = Counter()
+    obj.n = 7
+    mut t = pool.spawn(use_it, obj)
+    t.join()
+    print("compiled fine: Sendable class accepted")

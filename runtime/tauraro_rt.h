@@ -2896,6 +2896,86 @@ _TR_XLINK int   _tr_iopoll_del_h(char* p, long long fd)
  * reactor (epoll/IOCP-select/kqueue) and yields, so no thread ever blocks on
  * I/O (Node.js / Redis single-reactor model; multicore = future work).
  * ========================================================================= */
+/* Must match the exception-stack depth used by the shared exception-chain
+ * object below. Declared unconditionally (not just when coroutines are
+ * compiled in) because `_TrExcChain` backs BOTH the per-await-chain state
+ * used by `_TrCoro` and the plain root/thread-level state used when no
+ * coroutine is running (including BARE/WASM builds, which never define
+ * `_TrCoro` at all - see the `struct _TrCoro*` forward-reference below,
+ * legal in C without a full definition since it is never dereferenced
+ * there). `await`-ing a call spawns a genuinely separate CHILD `_TrCoro`
+ * (not inline execution): `try: r = await f()` pushes the try-handler on
+ * the AWAITER's exception state, then the awaited callee runs as its own
+ * coroutine and, if it raises, must find that SAME handler to unwind
+ * into. So the exception stack cannot be private to one `_TrCoro` - it
+ * has to be SHARED by the whole nested-await call chain rooted at
+ * whichever coroutine (or thread-level call) started it, and that shared
+ * chain must still be reachable no matter which OS thread ends up running
+ * any given coroutine in the chain (the motivating reason for this struct
+ * existing at all: a work-stealing pool can resume a chain member on a
+ * different worker than where it suspended). Implemented as a separate
+ * heap-allocated, refcounted object so its lifetime outlives any single
+ * member coroutine's own free. */
+#define _TR_MAX_EXC 64
+
+typedef struct _TrExcChain {
+    jmp_buf*         bufs[_TR_MAX_EXC];
+    char**           msgs[_TR_MAX_EXC];
+    struct _TrCoro*  owner[_TR_MAX_EXC]; /* which coro (or NULL = root) pushed this frame */
+    int              sp;
+    int              has_panic_buf;
+    jmp_buf          panic_jmpbuf;
+    char*            panic_message;
+    int              refcount;
+} _TrExcChain;
+
+static _TrExcChain* _tr_excchain_new(void) {
+    _TrExcChain* ch = (_TrExcChain*)calloc(1, sizeof(_TrExcChain));
+    ch->refcount = 1;
+    return ch;
+}
+
+/* `_TR_GLOBAL`/`_TR_THREAD_LOCAL` are normally defined much further down
+ * (near the panic-state globals), but `_tr_root_exc_chain` needs them
+ * here, ahead of the coroutine section. Guarded so the later, canonical
+ * definitions (identical expansions) don't conflict. */
+#ifndef _TR_GLOBAL
+#ifdef _TR_MAIN
+  #define _TR_GLOBAL
+#else
+  #define _TR_GLOBAL extern
+#endif
+#if defined(TAURARO_BARE) || defined(TAURARO_KERNEL)
+#  define _TR_THREAD_LOCAL
+#elif defined(_MSC_VER)
+#  define _TR_THREAD_LOCAL __declspec(thread)
+#elif defined(__GNUC__) || defined(__clang__)
+#  define _TR_THREAD_LOCAL __thread
+#else
+#  define _TR_THREAD_LOCAL _Thread_local
+#endif
+#endif /* _TR_GLOBAL */
+
+/* Thread-level root chain, used whenever no coroutine is currently running
+ * (plain code, or - importantly - `async def main()` itself, which is
+ * compiled as the real, non-coroutine `int main()` and drives its own
+ * top-level `await`s via `_tr_co_await`'s "outside a coroutine" pump; see
+ * `_tr_exc_chain_get()` below). Lazily created on first use. */
+_TR_GLOBAL _TR_THREAD_LOCAL _TrExcChain* _tr_root_exc_chain;
+
+#if !defined(TAURARO_BARE) && !defined(TAURARO_WASM)
+#define _TR_HAS_CORO 1
+#endif
+
+#if defined(TAURARO_BARE) || defined(TAURARO_WASM)
+/* No coroutines at all in this configuration - the root chain is the only
+ * chain that will ever exist, functionally identical to a plain stack. */
+static _TrExcChain* _tr_exc_chain_get(void) {
+    if (!_tr_root_exc_chain) _tr_root_exc_chain = _tr_excchain_new();
+    return _tr_root_exc_chain;
+}
+#endif
+
 #if !defined(TAURARO_BARE) && !defined(TAURARO_WASM)
 
 #if defined(_WIN32)
@@ -2929,6 +3009,7 @@ typedef struct _TrCoro {
     struct _TrCoro*  joiner;      /* coro waiting for this one to finish    */
     struct _TrCoro*  next;        /* ready-queue link                       */
     struct _TrCoro*  snext;       /* sleep-list link                        */
+    _TrExcChain*     exc_chain;   /* shared with every coro in this await-chain */
 } _TrCoro;
 
 typedef struct {
@@ -2954,6 +3035,16 @@ __thread _TrSchedG _tr_g = {0};
 #else
 extern __thread _TrSchedG _tr_g;
 #endif
+
+/* Coroutine-aware version of the chain accessor declared earlier (see its
+ * BARE/WASM sibling above `_tr_root_exc_chain`) - now that `_tr_g` exists,
+ * a running coroutine's OWN shared chain takes priority; otherwise falls
+ * back to the same lazily-created root chain plain/root code uses. */
+static _TrExcChain* _tr_exc_chain_get(void) {
+    if (_tr_g.current) return _tr_g.current->exc_chain;
+    if (!_tr_root_exc_chain) _tr_root_exc_chain = _tr_excchain_new();
+    return _tr_root_exc_chain;
+}
 
 static long long _tr_mono_ms(void) {
 #if defined(_WIN32)
@@ -3033,6 +3124,14 @@ static _TrCoro* _tr_co_go(_tr_coro_fn fn, void* arg) {
     _tr_sched_ensure();
     _TrCoro* c = (_TrCoro*)calloc(1, sizeof(_TrCoro));
     c->fn = fn; c->arg = arg; c->io_fd = -1; c->io_armed_fd = -1;
+    /* Inherit whatever exception chain is currently active - the awaiter's
+     * own coroutine chain for a nested `await` inside a `try`, or the
+     * thread's root chain for a top-level spawn (e.g. `async def main()`'s
+     * own first `await`, or one inside main()'s own top-level `try`) - so
+     * a raise deep inside this new coroutine can still find and unwind
+     * into a handler owned by a NON-coroutine caller. See _TrExcChain. */
+    c->exc_chain = _tr_exc_chain_get();
+    c->exc_chain->refcount++;
 #if defined(_WIN32)
     c->ctx = CreateFiber(_TR_CORO_STACK, _tr_co_entry, c);
 #else
@@ -3068,6 +3167,7 @@ static void _tr_co_free(_TrCoro* c) {
         _tr_iopoll_del(_tr_g.reactor, c->io_armed_fd);
         c->io_armed_fd = -1;
     }
+    if (c->exc_chain && --c->exc_chain->refcount == 0) free(c->exc_chain);
 #if defined(_WIN32)
     if (c->ctx) DeleteFiber(c->ctx);
 #else
@@ -3288,6 +3388,273 @@ static int _tr_co_await_timeout(_TrCoro* target, long long ms, long long* out) {
     return target->state == _TRC_DONE;
 }
 
+/* ── Chase-Lev lock-free work-stealing deque of _TrCoro* ──────────────────
+ * Backs `_TrAsyncPool`'s per-worker local run queues (see below): the
+ * OWNING worker pushes/pops its own "bottom" end on the fast path (no CAS
+ * needed except on the very last element); other workers ("thieves")
+ * steal from the "top" end via CAS when their own queue and the shared
+ * injector are both empty. Same non-resizable-array design Tokio's local
+ * queues and the classic Chase-Lev/Arora-Blumofe-Plassman deque use.
+ * Fixed capacity - a push that finds the deque full spills to the pool's
+ * shared injector queue instead of growing this array.
+ * Holds opaque `void*` (in practice, `_TrAsyncTask*` - see below), never
+ * a mid-flight `_TrCoro*`: the stealable unit is a whole, NOT-YET-STARTED
+ * top-level async call. Whichever worker dequeues one runs it to
+ * completion using its OWN private per-OS-thread green-thread scheduler
+ * (`_tr_g`) exactly like a plain top-level `await` already does today -
+ * no changes to that existing, battle-tested machinery, and no cross-
+ * thread reactor/exception-chain hazards, since a not-yet-started task
+ * has no reactor registration or in-flight try-frame to worry about. */
+#define _TR_DEQUE_CAP 1024
+
+typedef struct {
+    void*         buf[_TR_DEQUE_CAP];
+    _Atomic long long top;    /* thieves CAS this end */
+    _Atomic long long bottom; /* owner-only push/pop end */
+} _TrDeque;
+
+static void _tr_deque_init(_TrDeque* dq) {
+    atomic_init(&dq->top, 0);
+    atomic_init(&dq->bottom, 0);
+}
+
+/* Owner-thread-only. Returns 0 if the deque is full (caller should spill
+ * the task to the pool's shared injector queue instead). */
+static int _tr_deque_push(_TrDeque* dq, void* item) {
+    long long b = atomic_load_explicit(&dq->bottom, memory_order_relaxed);
+    long long t = atomic_load_explicit(&dq->top, memory_order_acquire);
+    if (b - t >= _TR_DEQUE_CAP) return 0;
+    dq->buf[(size_t)b % _TR_DEQUE_CAP] = item;
+    /* Publish the slot write before publishing the new bottom, so a thief
+     * that observes the incremented bottom also sees the slot's contents. */
+    atomic_thread_fence(memory_order_release);
+    atomic_store_explicit(&dq->bottom, b + 1, memory_order_relaxed);
+    return 1;
+}
+
+/* Owner-thread-only. Pops from the SAME end the owner pushes to (the
+ * newest task - best cache locality for the common producer-consumer-
+ * same-thread case); thieves take from the opposite (oldest) end, which
+ * is what keeps a steal and a local pop from usually colliding. Returns
+ * NULL if empty. */
+static void* _tr_deque_pop(_TrDeque* dq) {
+    long long b = atomic_load_explicit(&dq->bottom, memory_order_relaxed) - 1;
+    atomic_store_explicit(&dq->bottom, b, memory_order_relaxed);
+    atomic_thread_fence(memory_order_seq_cst);
+    long long t = atomic_load_explicit(&dq->top, memory_order_relaxed);
+    if (t > b) {
+        /* Was already empty (or a thief just took the last element) -
+         * restore bottom to a consistent empty state (bottom == top). */
+        atomic_store_explicit(&dq->bottom, t, memory_order_relaxed);
+        return NULL;
+    }
+    void* item = dq->buf[(size_t)b % _TR_DEQUE_CAP];
+    if (t == b) {
+        /* Exactly one element left: races with any concurrent thief for
+         * this same slot via CAS on `top`. */
+        long long expected = t;
+        if (!atomic_compare_exchange_strong_explicit(&dq->top, &expected, t + 1,
+                memory_order_seq_cst, memory_order_relaxed)) {
+            item = NULL; /* a thief won the race */
+        }
+        atomic_store_explicit(&dq->bottom, t + 1, memory_order_relaxed);
+    }
+    return item;
+}
+
+/* Any-thread ("thief") steal from the opposite end of the owner's pop.
+ * Returns NULL if the deque looked empty or another thief (or the owner,
+ * on the last element) won the race - caller should just try the next
+ * sibling rather than retry this one. */
+static void* _tr_deque_steal(_TrDeque* dq) {
+    long long t = atomic_load_explicit(&dq->top, memory_order_acquire);
+    atomic_thread_fence(memory_order_seq_cst);
+    long long b = atomic_load_explicit(&dq->bottom, memory_order_acquire);
+    if (t >= b) return NULL;
+    void* item = dq->buf[(size_t)t % _TR_DEQUE_CAP];
+    long long expected = t;
+    if (!atomic_compare_exchange_strong_explicit(&dq->top, &expected, t + 1,
+            memory_order_seq_cst, memory_order_relaxed)) {
+        return NULL;
+    }
+    return item;
+}
+
+/* ── AsyncTask: a handle to one work-stealing-pool-submitted async call ──
+ * Completion is signaled via a plain mutex+condvar (`_TrCondMutex`, already
+ * used elsewhere for `WaitGroup`/`ThreadPool`), NOT via the coroutine
+ * scheduler - `.await()` on a task handle is a cross-OS-thread join,
+ * exactly like `Thread.join()`/`ThreadPool.wait()` already are, so it
+ * blocks the CALLING OS thread until the task completes. This matches
+ * existing precedent rather than inventing a new "non-blocking join"
+ * mechanism; a task's own INTERNAL `await`s are unaffected and run
+ * entirely on whichever worker executes it (see `_TrDeque`'s comment). */
+typedef struct _TrAsyncTask {
+    _tr_coro_fn   fn;
+    void*         arg;
+    _Atomic int   done;
+    long long     result;
+    _TrCondMutex  cv;
+} _TrAsyncTask;
+
+static _TrAsyncTask* _tr_asynctask_new(_tr_coro_fn fn, void* arg) {
+    _TrAsyncTask* t = (_TrAsyncTask*)calloc(1, sizeof(_TrAsyncTask));
+    t->fn = fn; t->arg = arg;
+    _tr_condmutex_init(&t->cv);
+    return t;
+}
+
+/* Runs the task to completion on the CALLING (worker) thread's own private
+ * green-thread scheduler, then publishes the result. */
+static void _tr_asynctask_run_and_complete(_TrAsyncTask* t) {
+    _TrCoro* co = _tr_co_go(t->fn, t->arg);
+    long long r = _tr_co_await(co);
+    _tr_co_free(co);
+    _tr_condmutex_lock(&t->cv);
+    t->result = r;
+    atomic_store(&t->done, 1);
+    _tr_condmutex_signal(&t->cv);
+    _tr_condmutex_unlock(&t->cv);
+}
+
+/* Callable from any thread (including another pool worker awaiting a task
+ * it itself submitted). */
+static long long _tr_asynctask_await(_TrAsyncTask* t) {
+    _tr_condmutex_lock(&t->cv);
+    while (!atomic_load(&t->done)) _tr_condmutex_wait(&t->cv);
+    long long r = t->result;
+    _tr_condmutex_unlock(&t->cv);
+    return r;
+}
+static int _tr_asynctask_done(_TrAsyncTask* t) { return atomic_load(&t->done); }
+static void _tr_asynctask_free(_TrAsyncTask* t) { if (t) free(t); }
+
+/* ── AsyncPool: N-worker, work-stealing pool for top-level async calls ───
+ * Each worker is one persistent OS thread with its own `_TrDeque` (see
+ * above). `AsyncPool.spawn` round-robins a fresh, not-yet-started task
+ * onto a worker's deque (or the shared injector on overflow); an idle
+ * worker steals a task from a busy sibling's deque before it ever starts
+ * running, so it lands on whichever worker actually has spare capacity.
+ * Mirrors the existing `ThreadPool` naming/shape (`_tr_threadpool_*`)
+ * deliberately - same mental model, work-stealing instead of one shared
+ * queue. Lazily created on first use (see `_tr_asyncpool_default`) so
+ * pure-compute programs that never touch this API pay nothing for it. */
+typedef struct _TrPoolWorker {
+    _TrDeque              dq;
+    _TrThread             thread;
+    struct _TrAsyncPool*  pool;
+    int                   idx;
+} _TrPoolWorker;
+
+typedef struct _TrAsyncPool {
+    _TrPoolWorker*  workers;
+    int             n_workers;
+    _TrChan*        injector;   /* overflow + external (non-worker-thread) submissions */
+    _TrCondMutex    parkcv;     /* idle-worker park/wake */
+    volatile int    shutdown;
+    _Atomic long long rr;       /* round-robin submission counter */
+} _TrAsyncPool;
+
+/* One worker's attempt to find ONE runnable task without blocking: its
+ * own deque, then the shared injector, then a steal from each sibling in
+ * turn. Returns NULL if nothing was found anywhere on this pass. */
+static _TrAsyncTask* _tr_pool_find_work(_TrAsyncPool* pool, _TrPoolWorker* self) {
+    void* item = _tr_deque_pop(&self->dq);
+    if (item) return (_TrAsyncTask*)item;
+    long long v = _tr_chan_try_recv_val(pool->injector);
+    if (v != LLONG_MIN) return (_TrAsyncTask*)(uintptr_t)v;
+    for (int i = 0; i < pool->n_workers; i++) {
+        if (i == self->idx) continue;
+        item = _tr_deque_steal(&pool->workers[i].dq);
+        if (item) return (_TrAsyncTask*)item;
+    }
+    return NULL;
+}
+
+static void* _tr_pool_worker_main(void* arg) {
+    _TrPoolWorker* self = (_TrPoolWorker*)arg;
+    _TrAsyncPool* pool = self->pool;
+    for (;;) {
+        _TrAsyncTask* t = _tr_pool_find_work(pool, self);
+        if (t) { _tr_asynctask_run_and_complete(t); continue; }
+        if (pool->shutdown) break;
+        /* Nothing anywhere on this pass: park briefly. Re-checked in a
+         * loop (standard condvar usage) since a task can arrive, and a
+         * submitter can signal, between our last empty check and the
+         * lock below - the timeout is just a safety net against a missed
+         * wakeup race, not the primary mechanism. */
+        _tr_condmutex_lock(&pool->parkcv);
+        if (!pool->shutdown) _tr_condmutex_wait(&pool->parkcv);
+        _tr_condmutex_unlock(&pool->parkcv);
+    }
+    return NULL;
+}
+
+static _TrAsyncPool* _tr_asyncpool_new(long long n) {
+    if (n < 1) n = 1;
+    _TrAsyncPool* pool = (_TrAsyncPool*)calloc(1, sizeof(_TrAsyncPool));
+    pool->n_workers = (int)n;
+    pool->workers = (_TrPoolWorker*)calloc((size_t)n, sizeof(_TrPoolWorker));
+    pool->injector = _tr_chan_new(n * 8 + 64);
+    _tr_condmutex_init(&pool->parkcv);
+    for (int i = 0; i < (int)n; i++) {
+        pool->workers[i].pool = pool;
+        pool->workers[i].idx = i;
+        _tr_deque_init(&pool->workers[i].dq);
+    }
+    /* Threads started only after every worker's own state is initialized -
+     * a freshly-started worker may immediately try to steal from a
+     * sibling whose deque must already be valid. */
+    for (int i = 0; i < (int)n; i++)
+        pool->workers[i].thread = _tr_thread_start(_tr_pool_worker_main, &pool->workers[i]);
+    return pool;
+}
+
+/* Submit a not-yet-started top-level async call. Callable from ANY
+ * thread (a pool worker itself, included - e.g. one task spawning
+ * another). Round-robins across workers' own deques (cheap, no
+ * contention on the common un-full case); falls back to the shared
+ * injector if the chosen worker's deque is momentarily full. Signals a
+ * parked worker either way. */
+static _TrAsyncTask* _tr_asyncpool_spawn(_TrAsyncPool* pool, _tr_coro_fn fn, void* arg) {
+    _TrAsyncTask* t = _tr_asynctask_new(fn, arg);
+    long long i = atomic_fetch_add_explicit(&pool->rr, 1, memory_order_relaxed) % pool->n_workers;
+    if (!_tr_deque_push(&pool->workers[i].dq, t))
+        _tr_chan_try_send(pool->injector, (long long)(uintptr_t)t);
+    _tr_condmutex_lock(&pool->parkcv);
+    _tr_condmutex_signal(&pool->parkcv);
+    _tr_condmutex_unlock(&pool->parkcv);
+    return t;
+}
+
+static void _tr_asyncpool_free(_TrAsyncPool* pool) {
+    if (!pool) return;
+    pool->shutdown = 1;
+    _tr_condmutex_lock(&pool->parkcv);
+    /* Wake every parked worker, not just one - shutdown needs all of them
+     * to observe `shutdown` and exit, not just whichever one wakes first. */
+    for (int i = 0; i < pool->n_workers; i++) _tr_condmutex_signal(&pool->parkcv);
+    _tr_condmutex_unlock(&pool->parkcv);
+    for (int i = 0; i < pool->n_workers; i++) _tr_thread_join_wait(pool->workers[i].thread);
+    _tr_chan_free(pool->injector);
+    free(pool->workers);
+    free(pool);
+}
+
+/* Shared, lazily-created default pool (one per process) - the same
+ * lazy-singleton pattern `_tr_async_pool()`/`_tr_global_async_pool`
+ * already established for `ThreadPool`, sized to the machine's core
+ * count via the existing `_tr_threadpool_auto_n()`. `await_all` and
+ * `AsyncPool.auto()`-without-an-explicit-instance both submit here. */
+_TR_GLOBAL _TrAsyncPool* _tr_global_asyncpool;
+static _TrAsyncPool* _tr_asyncpool_default(void) {
+    if (!_tr_global_asyncpool) _tr_global_asyncpool = _tr_asyncpool_new(_tr_threadpool_auto_n());
+    return _tr_global_asyncpool;
+}
+static void _tr_asyncpool_default_shutdown(void) {
+    if (_tr_global_asyncpool) { _tr_asyncpool_free(_tr_global_asyncpool); _tr_global_asyncpool = NULL; }
+}
+
 /* Tauraro-callable handle-based wrappers - extern "C" decls in std/async. The C backend
  * (which #includes this header) keeps them `static inline`. The NATIVE/LLVM backend links
  * runtime.o (native_abi.c) and needs them as REAL EXPORTED symbols so `await`/`Coro.*`
@@ -3496,6 +3863,7 @@ static inline void _tr_bounds_check(long long i, size_t len) {
     }
 }
 
+#ifndef _TR_GLOBAL
 #ifdef _TR_MAIN
   #define _TR_GLOBAL
 #else
@@ -3512,6 +3880,7 @@ static inline void _tr_bounds_check(long long i, size_t len) {
 #else
 #  define _TR_THREAD_LOCAL _Thread_local
 #endif
+#endif /* _TR_GLOBAL */
 
 /* argc/argv made available to std.sys.env at runtime. */
 _TR_GLOBAL int    _tr_argc;
@@ -3566,6 +3935,45 @@ _TR_XLINK void _tr_taskgroup_wait(void) {
     _tr_tg.count = 0; _tr_tg.cap = 0;
 }
 
+/* ── AsyncTaskGroup: `await_all`'s pool-backed replacement for _TrTaskGroup ─
+ * Exact mirror of _TrTaskGroup/_tr_tg_* above, but collecting `_TrAsyncTask*`
+ * handles (submitted to the shared work-stealing AsyncPool, see above)
+ * instead of raw `_TrThread` handles - `await_all(f1(), f2(), ...)` used
+ * to spawn one throwaway OS thread PER SUB-CALL (unbounded: 1000 sub-calls
+ * = 1000 OS threads); now every sub-call is a stealable task on a small,
+ * reused, core-sized worker pool instead. Same single-shared-global
+ * pattern as `_tr_tg` (so, same pre-existing constraint: an `await_all`
+ * cannot nest inside another `await_all` on the same thread - unchanged
+ * from before this migration, not a new limitation). */
+typedef struct { _TrAsyncTask** tasks; int count; int cap; } _TrAsyncTaskGroup;
+_TR_GLOBAL _TrAsyncTaskGroup _tr_atg;
+
+_TR_XLINK void _tr_atg_begin(void) {
+    _tr_atg.cap = 16; _tr_atg.count = 0;
+    _tr_atg.tasks = (_TrAsyncTask**)TAURARO_ALLOC((size_t)_tr_atg.cap * sizeof(_TrAsyncTask*));
+}
+_TR_XLINK void _tr_atg_push(_TrAsyncTask* t) {
+    if (_tr_atg.count >= _tr_atg.cap) {
+        _tr_atg.cap *= 2;
+        _tr_atg.tasks = (_TrAsyncTask**)TAURARO_REALLOC(_tr_atg.tasks, (size_t)_tr_atg.cap * sizeof(_TrAsyncTask*));
+    }
+    _tr_atg.tasks[_tr_atg.count++] = t;
+}
+/* Submits fn(arg) onto the shared default AsyncPool and tracks the
+ * resulting handle for `_tr_atg_wait` - the one-call-site convenience
+ * `await_all`'s codegen actually uses (push+spawn combined). */
+_TR_XLINK void _tr_atg_spawn(void*(*fn)(void*), void* arg) {
+    _tr_atg_push(_tr_asyncpool_spawn(_tr_asyncpool_default(), fn, arg));
+}
+_TR_XLINK void _tr_atg_wait(void) {
+    for (int i = 0; i < _tr_atg.count; i++) {
+        _tr_asynctask_await(_tr_atg.tasks[i]);
+        _tr_asynctask_free(_tr_atg.tasks[i]);
+    }
+    if (_tr_atg.tasks) { TAURARO_FREE(_tr_atg.tasks); _tr_atg.tasks = NULL; }
+    _tr_atg.count = 0; _tr_atg.cap = 0;
+}
+
 /* ── Per-thread panic state (storage definitions for _TR_MAIN TU) ─── */
 #if !defined(TAURARO_BARE) && !defined(TAURARO_KERNEL) && !defined(TAURARO_NO_THREADS)
 _TR_GLOBAL _TR_THREAD_LOCAL int     _tr_thread_has_panic_buf;
@@ -3573,28 +3981,69 @@ _TR_GLOBAL _TR_THREAD_LOCAL jmp_buf _tr_thread_panic_jmpbuf;
 _TR_GLOBAL _TR_THREAD_LOCAL char*   _tr_thread_panic_message;
 #endif
 
-/* ── Exception stack (setjmp/longjmp based, per-thread) ─────────────── */
-
-#define _TR_MAX_EXC 64
-_TR_GLOBAL _TR_THREAD_LOCAL jmp_buf*  _tr_exc_bufs[_TR_MAX_EXC];
-_TR_GLOBAL _TR_THREAD_LOCAL char**    _tr_exc_msgs[_TR_MAX_EXC];
-_TR_GLOBAL _TR_THREAD_LOCAL int       _tr_exc_sp;
+/* ── Exception stack (setjmp/longjmp based, per-await-chain) ─────────────
+ * Uniformly backed by `_TrExcChain` and `_tr_exc_chain_get()` (both
+ * declared earlier, above `_tr_excchain_new`/near `_tr_g`), whether the
+ * current context is "inside a coroutine" or plain top-level/OS-thread
+ * code. This one unification is what makes an exception raised inside an
+ * `await`ed call correctly reach a `try` in a NON-coroutine caller (e.g.
+ * `async def main()`'s own top-level try/except, which runs as plain C
+ * code, not as a coroutine - `_tr_co_go` inherits whatever chain
+ * `_tr_exc_chain_get()` returns at spawn time, root chain included) as
+ * well as a `try` in an ancestor coroutine several `await` levels up, and
+ * survives a work-stealing pool resuming any one member of that chain on
+ * a different OS thread than where it suspended (the chain object itself
+ * is just heap memory, not thread-local). */
 
 static void _tr_exc_push(jmp_buf* b, char** m) {
-    if (_tr_exc_sp < _TR_MAX_EXC) {
-        _tr_exc_bufs[_tr_exc_sp] = b;
-        _tr_exc_msgs[_tr_exc_sp] = m;
-        _tr_exc_sp++;
+    _TrExcChain* ch = _tr_exc_chain_get();
+    if (ch->sp < _TR_MAX_EXC) {
+#ifdef _TR_HAS_CORO
+        ch->owner[ch->sp] = _tr_g.current;
+#endif
+        ch->bufs[ch->sp] = b; ch->msgs[ch->sp] = m; ch->sp++;
     }
 }
-static void _tr_exc_pop(void)  { if (_tr_exc_sp > 0) _tr_exc_sp--; }
+static void _tr_exc_pop(void) {
+    _TrExcChain* ch = _tr_exc_chain_get();
+    if (ch->sp > 0) ch->sp--;
+}
 _TR_XLINK void _tr_exc_raise(char* msg) {
-    if (_tr_exc_sp > 0) {
-        _tr_exc_sp--;
-        *_tr_exc_msgs[_tr_exc_sp] = msg;
-        longjmp(*_tr_exc_bufs[_tr_exc_sp], 1);
+    _TrExcChain* ch = _tr_exc_chain_get();
+    if (ch->sp > 0) {
+        ch->sp--;
+        *ch->msgs[ch->sp] = msg;
+#ifdef _TR_HAS_CORO
+        /* The handler being unwound into belongs to `ch->owner[ch->sp]`
+         * (the coroutine - or NULL for plain/root context - that pushed
+         * it), which may differ from whoever is currently raising (e.g.
+         * `await`ing a call inside a `try`: the callee raises, the
+         * awaiter owns the handler). Restore `_tr_g.current` to that
+         * owner so code running after the jump (the `except:` block, and
+         * anything it itself awaits) sees the correct identity.
+         * KNOWN LIMITATION (pre-existing, not introduced or fixed by this
+         * change): the raising coroutine (and any coroutine between it
+         * and the handler's owner along the await chain) is abandoned
+         * mid-flight by this longjmp rather than freed - its stack/fiber
+         * leaks. Freeing it safely needs a real unwind-and-cleanup pass,
+         * not just an owner pointer; out of scope here since it turns a
+         * leak into a potential crash if gotten wrong. Follow-up work. */
+        _tr_g.current = ch->owner[ch->sp];
+#endif
+        longjmp(*ch->bufs[ch->sp], 1);
     }
-    /* No user try-handler: escalate to thread panic handler if in a spawned thread */
+    /* No user try-handler anywhere in this chain: prefer the chain's OWN
+     * panic handler if one has been installed (set by a pool worker
+     * wrapping one task's run, so a stolen chain's panic boundary stays
+     * with the chain, not whichever OS thread happens to run it). Falls
+     * through to the CURRENT OS thread's own panic buf otherwise -
+     * unchanged behavior for plain/root-chain code and for a coroutine
+     * driven from inside a Thread.spawn'd function via the top-level
+     * `_tr_co_await` pump, exactly as before this whole section existed. */
+    if (ch->has_panic_buf) {
+        ch->panic_message = msg;
+        longjmp(ch->panic_jmpbuf, 1);
+    }
     if (_tr_thread_has_panic_buf) {
         _tr_thread_panic_message = msg;
         longjmp(_tr_thread_panic_jmpbuf, 1);

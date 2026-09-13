@@ -1,0 +1,41 @@
+# std.async.pool — AsyncPool: a work-stealing pool for top-level async calls.
+#
+# The language already provides:
+#   await f(args)                run one async call, suspend the caller
+#   await_all(f1(), f2(), ...)   run several async calls concurrently, wait
+#                                 for all (now itself backed by AsyncPool —
+#                                 see below)
+#   Thread.spawn(fn, arg)        one raw OS thread per call
+#   ThreadPool                   N OS threads pulling from one shared queue
+#
+# AsyncPool fills the gap between `await_all` (fixed batch, no individual
+# handles) and `Thread.spawn` (unbounded OS threads): submit any number of
+# independent async calls over time, each running as a coroutine on
+# whichever of N persistent worker threads has spare capacity — an idle
+# worker STEALS a not-yet-started call from a busier sibling's queue
+# rather than waiting for it, the same load-balancing model as Go's or
+# Tokio's runtime. A submitted call's OWN internal `await`s work correctly
+# (it runs inside a real coroutine on its worker), and N calls share a
+# small, reused pool instead of N throwaway OS threads.
+#
+#   mut pool = AsyncPool.auto()             # sized to the machine's cores
+#   mut pool2 = AsyncPool.new(8)            # explicit worker count
+#   mut t = pool.spawn(fetch_page, url)     # -> AsyncTask, runs immediately
+#   t.join()                                # blocks the CALLING thread until done
+#                                            # (a cross-thread join, same as
+#                                            # Thread.join()/ThreadPool.wait() -
+#                                            # named `join`, not `await`, since
+#                                            # `await` is a language keyword)
+#   t.done()                                # non-blocking completion check
+#   t.free()                                # release the handle
+#   pool.free()                             # stop workers, join them, free the pool
+#
+# NOTE: like Thread/ThreadPool, these are built-in types handled by the
+# compiler's built-in dispatch. Importing this module makes the names
+# available; no OOP wrapper is needed.
+
+pub class AsyncPool:
+    pass
+
+pub class AsyncTask:
+    pass

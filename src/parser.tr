@@ -2965,6 +2965,28 @@ extend Parser:
                     m.is_public = is_p
                     m.decorators = decorators
                     fl.push(m)
+                case Token.KwAsync:
+                    # `async def` on an extend-block METHOD (as opposed to a
+                    # top-level function, handled elsewhere) -- previously
+                    # unhandled here, so it fell into the catch-all `case _`
+                    # below and silently discarded the `async` token: the
+                    # method still parsed (as an ordinary sync method), but
+                    # `m.is_async` was never set, so any `await` inside its
+                    # body rejected with "[C-4] 'await' used outside an
+                    # async function" even though the method WAS declared
+                    # `async def`. Confirmed directly with a minimal,
+                    # tauorm-unrelated repro (an `async def` method calling
+                    # `await` on another `async def` method).
+                    self.pos = self.pos + 1
+                    match self.peek():
+                        case Token.KwDef:
+                            mut am = self.parse_function_def(True)
+                            am.is_async = True
+                            am.is_public = is_p
+                            am.decorators = decorators
+                            fl.push(am)
+                        case _:
+                            pass
                 case Token.KwPass:
                     self.pos = self.pos + 1
                     self.expect_newline()

@@ -1,0 +1,27 @@
+async def risky(n: int) -> int:
+    if n < 0:
+        raise("negative!")
+    return n * 2
+
+async def safe_wrapper(n: int) -> int:
+    try:
+        mut r = await risky(n)
+        return r
+    except e:
+        print("caught: " + e)
+        return -1
+    return -2
+
+async def main():
+    mut a = await safe_wrapper(5)
+    print(a.to_str())
+    mut b = await safe_wrapper(-1)
+    print(b.to_str())
+
+    try:
+        mut v = await risky(-5)
+        print(v.to_str())
+    except e2:
+        print("outer caught: " + e2)
+
+    print("done")

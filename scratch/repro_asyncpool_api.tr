@@ -1,0 +1,25 @@
+from std.async.pool import AsyncPool, AsyncTask
+
+async def work(n: int) -> int:
+    mut x = 0
+    mut i = 0
+    while i < 1000:
+        x = x + i
+        i = i + 1
+    return x + n
+
+def main():
+    mut pool = AsyncPool.auto()
+    mut t1 = pool.spawn(work, 1)
+    mut t2 = pool.spawn(work, 2)
+    mut t3 = pool.spawn(work, 3)
+    t1.join()
+    t2.join()
+    t3.join()
+    print("all 3 AsyncPool tasks completed")
+    print(t1.done().to_str())
+    t1.free()
+    t2.free()
+    t3.free()
+    pool.free()
+    print("done")

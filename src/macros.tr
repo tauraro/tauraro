@@ -677,6 +677,29 @@ extend FnMacroExpander:
 
 # Returns number of macro errors encountered (caller aborts if > 0).
 pub def expand_macros(prog: Program) -> int:
+    return expand_macros_tracked(prog, Vec[Pointer[Decl]].init(0), Vec[str].init(0))
+
+# Same expansion as expand_macros, but also attributes each newly-spliced
+# top-level decl to the SAME module its `@decorator`-annotated trigger decl
+# belongs to, by appending matching entries to all_decls/all_decl_modules
+# (the ModuleResolver's own bookkeeping vecs, passed in live by the caller).
+#
+# Without this, a macro-generated PLAIN TOP-LEVEL decl (e.g. `@make_greeter`
+# emitting `pub def greet_Foo() -> str: ...`) gets its prototype declared and
+# call sites resolve fine (it IS present in the post-expansion HIR used for
+# codegen), but main.tr's per-module class_set/fn_set bucketing -- used to
+# decide which generated .c file should contain a given function's BODY --
+# is built from resolver.all_decls/all_decl_modules, which are snapshotted
+# BEFORE this pass runs and never learn about anything spliced in here. The
+# body-emission loops gate on membership in that (now-stale) set, so the
+# function's body is silently never written to any .c file: a real,
+# confirmed link error ("undefined reference to greet_Foo") despite --check
+# passing cleanly. Root-caused directly (not previously): resolver.all_decls
+# and prog.decls are the SAME pointers in the SAME order at this pass's
+# entry (resolve_main copies one into the other verbatim), so the loop
+# index below doubles as a valid lookup key into all_decl_modules for each
+# trigger decl's own module, with no separate pointer search needed.
+pub def expand_macros_tracked(prog: Program, all_decls: Vec[Pointer[Decl]], all_decl_modules: Vec[str]) -> int:
     # 1. collect macro registry
     mut macros = Map[str, FunctionDef].init(16)
     mut nmac = 0
@@ -695,6 +718,8 @@ pub def expand_macros(prog: Program) -> int:
     mut gbase = 0   # shared gensym counter across @- and !-form expansions
     mut out = Vec[Pointer[Decl]].init(prog.decls.len)
     mut gen = Vec[Pointer[Decl]].init(8)
+    mut gen_modules = Vec[str].init(8)   # parallel to gen: owning module of each
+    mut have_module_info = all_decl_modules.len == prog.decls.len
     i = 0
     while i < prog.decls.len:
         mut dptr = prog.decls.get(i)
@@ -720,13 +745,23 @@ pub def expand_macros(prog: Program) -> int:
                         print("error: [MACRO] @" + dname + ": " + ctx.error_msg)
                         errors = errors + 1
                     else:
+                        mut gen_before = gen.len
                         parse_into(ctx.result, gen)
+                        if have_module_info:
+                            mut trigger_mod = all_decl_modules.get(i)
+                            mut gj = gen_before
+                            while gj < gen.len:
+                                gen_modules.push(trigger_mod)
+                                gj = gj + 1
                 di = di + 1
             out.push(dptr)
         i = i + 1
     mut gi = 0
     while gi < gen.len:
         out.push(gen.get(gi))
+        if have_module_info:
+            all_decls.push(gen.get(gi))
+            all_decl_modules.push(gen_modules.get(gi))
         gi = gi + 1
     # Function-like `name!(…)` expansion over the final decl set (original +
     # macro-generated). Runs after `@` expansion so generated bodies are covered.

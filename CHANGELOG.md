@@ -17,6 +17,35 @@ codegen-safety / diagnostics / stdlib / tooling improvements). Entries will be
 added here as each phase lands.
 
 ### Fixed
+- **`Type.auto()`-style zero-arg static factory constructors (e.g.
+  `ThreadPool.auto()`) never had their return type inferred** — confirmed
+  present in the unmodified compiler, not introduced by the `AsyncPool` work
+  that surfaced it. The generic static-constructor return-type rule only
+  matched `method == "init" or method == "new"`; `ThreadPool.auto()`'s call
+  fell through un-typed, so `mut pool = ThreadPool.auto()` left `pool`
+  untyped and every subsequent `pool.spawn(...)`/`.wait()`/`.free()` call
+  silently miscompiled as a call to an undeclared global function (a real,
+  loud C compile error, not a silent wrong-behavior bug). Fixed by adding
+  `auto` alongside `init`/`new` in that rule (`src/sema.tr`) — fixes
+  `ThreadPool.auto()` and the new `AsyncPool.auto()` alike.
+- **An exception raised inside an `await`ed call was never caught by the
+  awaiter's own `try`/`except`** — confirmed present in the unmodified
+  compiler via a minimal, non-coroutine-unrelated repro (`try: r = await
+  risky(); except e: ...` where `risky()` raises). Root cause: the exception
+  stack was plain thread-local, but `await` runs the callee as a genuinely
+  separate child coroutine — when the child raised, it had no way to reach
+  the *parent* coroutine's pushed handler. Fixed by making the exception (and
+  panic) stack a shared, refcounted object (`_TrExcChain`,
+  `runtime/tauraro_rt.h`) inherited by every coroutine in one nested-`await`
+  call chain, including a plain (non-coroutine) top-level caller like `async
+  def main()`'s own `try` block. **Known remaining gap, tracked as follow-up,
+  not fixed by this change:** on the Windows Fiber backend specifically, the
+  actual `longjmp` used to unwind into the (now correctly-found) handler can
+  still crash (`STATUS_INVALID_HANDLE`) when it crosses a `SwitchToFiber`
+  boundary, since Windows tracks "current fiber" as separate OS-level state a
+  raw `longjmp` doesn't update — a real, pre-existing, Windows-specific
+  limitation, unrelated to the exception-chain fix itself and not something
+  this change could safely fix at the same time.
 - **F-1 collection-push leak closed.** `v.push(Box.init(k))` for a `Vec[HeapClass]`
   RETAINED the fresh constructor result (rc 1→2) instead of MOVING it, leaking the
   temporary's reference (the container releases only one). Static constructors
@@ -181,6 +210,84 @@ added here as each phase lands.
   parameter (`too few arguments to function`). Defaulted to `16`
   (`src/codegen/c.tr`), matching the identical no-arg default `Set[T].init()`
   already had two branches above it in the same function.
+- **`await` on a `throws`-declared function tried to cast a `Result` struct
+  to/from a scalar integer** (`aggregate value used where an integer was
+  expected` / `conversion to non-scalar type requested`), since a `Result`/
+  `Option`/`Tuple` return value is an aggregate, not a pointer- or
+  integer-sized scalar, and the generic `void*`-channel the coroutine
+  wrapper uses to pass a task's result back assumed the latter.
+  `emit_async_wrapper_for_call` and `gen_await_call` (`src/codegen/c.tr`)
+  now heap-allocate room for the struct, copy the return value into it, and
+  hand back the pointer through that same channel, dereferencing and
+  freeing it on the await side — the same pattern every other return type
+  on that channel already used.
+- **`fname[T](args)` (a single explicit type argument) never looked up the
+  called function's actual declared return type**, instead blindly setting
+  the call's result type to the type ARGUMENT itself — correct only when
+  the function's return type genuinely is its own generic parameter
+  (`id[T](x: T) -> T`), and silently wrong for anything else
+  (`get_value[T](f: T) -> int`, always `int` regardless of `T`): a plain
+  sync call like `get_value[Foo](foo)` mis-inferred `Foo` as the result
+  type (an immediate, loud C compile error), while the same call reached
+  through `await` corrupted the value silently instead (the mismatch never
+  surfaced as a type error, since the coroutine result channel is an
+  untyped `void*`). The multi-type-argument sibling case
+  (`fname[T1,T2](args)`) already resolved this correctly; the single-arg
+  case in `sema.tr`'s generic free-function call handling just never had
+  the matching logic. Fixed by looking up the function's declared return
+  type and only substituting the explicit type argument when it actually
+  matches the function's own (first) generic parameter, mirroring the
+  multi-arg case.
+- **`async def` methods declared inside an `extend` block were not
+  recognized as async at all.** `parse_extend_decl`'s method-parsing loop
+  (`src/parser.tr`) had cases for `KwDef`/`KwPass`/`Dedent|Eof` but none for
+  `KwAsync` — an `async` token there fell into the catch-all
+  `case _: self.pos += 1`, silently discarding it; the method then parsed
+  as an ordinary synchronous method (`is_async` never set on it). This was
+  invisible unless the method's own body called `await` internally, in
+  which case it failed with `[C-4] 'await' used outside an async function`
+  on a method plainly declared `async def`. **Async methods were entirely
+  unsupported before this fix — only async free functions worked.** Fixed
+  by adding a `Token.KwAsync` case mirroring the top-level declaration
+  parser's own handling of the same keyword.
+- **`Map`/`Dict` `.get()` / `.get_or()` / `.set()` / `.free()` checked the
+  raw, un-substituted generic type-PARAMETER name (e.g. literally `"T"`)
+  against the str/float value-type checks instead of resolving it through
+  the active monomorphization substitution first.** Inside a monomorphized
+  method where a field's value type resolves concretely for that
+  instantiation (e.g. `Map[str, T]` with `T=str`), the raw-name check
+  always missed, and `.get()` produced `(TrStr)(uintptr_t)ptr` — casting a
+  pointer directly to a non-scalar STRUCT type (`conversion to non-scalar
+  type requested`). Fixed 4 call sites in `codegen/c.tr` to resolve the
+  value type name via `resolve_generic_prim(...)` first, the same helper
+  the adjacent float-value check at each site already (inconsistently)
+  used. A pre-existing SLet-level compensating recovery for a different,
+  genuinely distinct case — a bare `Dict` annotation with no value-type
+  argument at all (`mut config: Dict = {...}`), which has no type
+  information to resolve in the first place — was updated to use the same
+  resolved check rather than the raw one, so the two mechanisms agree on
+  when unboxing has already happened and a value is never double-unboxed.
+- **A macro-generated plain top-level declaration's function BODY was
+  never emitted into any generated `.c` file**, producing an undefined-
+  reference link error despite `--check` passing cleanly and the
+  prototype being correctly declared and referenced. Root cause:
+  `main.tr` builds the per-module (and main-module) function/class sets
+  used to decide which generated `.c` file's body-emission loop a given
+  declaration belongs to from `resolver.all_decls`/`all_decl_modules`,
+  snapshotted by `resolve_main` **before** `expand_macros` runs; a
+  macro-spliced declaration is appended to the program's declaration list
+  during macro expansion but those resolver-owned bookkeeping lists never
+  learn about it, so it is absent from every module's function set and
+  its body-emission is silently skipped everywhere. Fixed via a new
+  `expand_macros_tracked(prog, all_decls, all_decl_modules)` (`macros.tr`)
+  that pushes each newly-generated declaration into the same resolver
+  lists, attributed to its triggering declaration's own module — sound
+  because `prog.decls[i]` and `resolver.all_decls[i]` are the same
+  pointers in the same order at this pass's entry point (`resolve_main`
+  copies one into the other verbatim), so the loop index doubles as a
+  valid lookup key into `all_decl_modules`. `main.tr` updated to call the
+  tracked variant (the untracked `expand_macros` is kept as a thin
+  wrapper for any other caller).
 
 ### Fixed (build/CI)
 - **The portable-C bootstrap seed (`bootstrap/c/`) was missing the
@@ -206,7 +313,8 @@ added here as each phase lands.
   chains, cooperative `Coro.sleep_ms` (timer-parked) and `Coro.yield_now`, and
   reactor-based `Coro.await_readable`/`await_writable` are provided via the new
   `std/async/coro` module. (`spawn`/`task_group` keep OS-thread parallelism for
-  CPU-bound work; multi-core green-thread scheduling is future work.)
+  CPU-bound work.) Multi-core work-stealing landed separately — see `AsyncPool`
+  under Added, and `await_all`'s entry under Fixed.
 - Debug builds (`--debug`) now emit C `#line N "source.tr"` directives mapping
   each generated statement back to its original Tauraro source file and line,
   so GCC diagnostics and GDB backtraces reference the `.tr` source rather than
@@ -230,6 +338,31 @@ added here as each phase lands.
   is diagnostic-only and never affects codegen.)
 
 ### Added
+- **`AsyncPool`/`AsyncTask`: a multi-core, work-stealing pool for top-level
+  async calls**, closing the "multi-core green-thread scheduling" gap noted
+  above. Each of N persistent worker OS threads owns a lock-free
+  Chase-Lev work-stealing deque (`runtime/tauraro_rt.h`'s `_TrDeque`); an idle
+  worker steals a not-yet-started task from a busier sibling's deque rather
+  than waiting, the same load-balancing model as Go's or Tokio's runtime. A
+  submitted call runs as a real coroutine on whichever worker executes it, so
+  its own internal `await`s work correctly, and N calls share a small, reused
+  pool instead of N throwaway OS threads:
+  ```
+  mut pool = AsyncPool.auto()             # sized to the machine's cores
+  mut t = pool.spawn(fetch_page, url)     # -> AsyncTask, runs immediately
+  t.join()                                # cross-thread join, like Thread.join()
+  ```
+  `AsyncPool.spawn` is Sendable-checked at compile time exactly like
+  `spawn`/`Thread.spawn`/`ThreadPool.spawn` (`[T-1]`/`[T-2]`/`[T-7]`), since a
+  submitted task's captured state may run on a different worker than the one
+  that submitted it — zero runtime cost, the same mechanism Rust's `Future:
+  Send` bound enforces for `tokio::spawn`. See `std/async/pool.tr`.
+- **`await_all(f1(), f2(), ...)` now runs on the `AsyncPool` above instead of
+  spawning one raw OS thread per sub-call.** Previously a large `await_all`
+  batch (e.g. 300 simultaneous sub-calls) spawned 300 real OS threads;
+  verified this now stays bounded near the machine's core count for the same
+  workload, with no change to `await_all`'s syntax, semantics, or existing
+  Sendable checking on its arguments.
 - Bidirectional FFI / library export: an `export def` function is given C-ABI
   external linkage (`__declspec(dllexport)` on Windows, default visibility on
   ELF/Mach-O via the new `TR_EXPORT` macro). The new `tauraroc --lib` mode

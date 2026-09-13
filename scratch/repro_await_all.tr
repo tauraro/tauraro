@@ -1,0 +1,6 @@
+async def work(n: int) -> int:
+    return n * 2
+
+async def main():
+    await_all(work(1), work(2), work(3))
+    print("done: 3 sub-calls")

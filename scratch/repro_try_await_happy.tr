@@ -1,0 +1,15 @@
+async def inner(n: int) -> int:
+    return n * 2
+
+async def wrapper(n: int) -> int:
+    try:
+        mut r = await inner(n)
+        return r
+    except e:
+        print("caught: " + e)
+        return -1
+    return -2
+
+async def main():
+    mut a = await wrapper(5)
+    print(a.to_str())

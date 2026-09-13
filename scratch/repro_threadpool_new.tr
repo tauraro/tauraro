@@ -1,0 +1,11 @@
+from std.async.thread import Thread
+
+def worker(n: int) -> int:
+    return n * 2
+
+def main():
+    mut pool = ThreadPool.new(4)
+    pool.spawn(worker, 5)
+    pool.wait()
+    pool.free()
+    print("done")

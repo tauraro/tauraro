@@ -1,0 +1,9 @@
+async def risky() -> int:
+    raise("boom")
+
+async def main():
+    try:
+        mut v = await risky()
+        print(v.to_str())
+    except e:
+        print("caught: " + e)

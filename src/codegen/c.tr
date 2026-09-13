@@ -719,6 +719,8 @@ pub class CGenerator:
         if n == "RwLock": return "_TrRWLBox*"
         if n == "ThreadPool": return "_TrThreadPool*"
         if n == "Thread": return "_TrThreadObj*"
+        if n == "AsyncPool": return "_TrAsyncPool*"
+        if n == "AsyncTask": return "_TrAsyncTask*"
         if n == "Atomic": return "_TrAtomic*"
         if n == "ThreadLocal": return "_TrTLS*"
         if n == "Shared": return "_TrSharedBox*"
@@ -1009,6 +1011,25 @@ pub class CGenerator:
         self.struct_buf  = self.mono_buf
         self.proto_buf   = self.mono_buf
 
+        # Pre-resolve every field's C type BEFORE writing this struct's own
+        # typedef. A field whose type is itself a not-yet-monomorphized
+        # generic class (e.g. Session[T,C,RS]'s `engine: Engine[C,RS]`
+        # field) makes type_to_c call ensure_mono recursively; that nested
+        # call writes through the exact same self.buf/mono_buf redirect
+        # this function just set up, so if it fired mid-way through OUR
+        # OWN field loop, the nested struct's entire typedef+prototypes
+        # landed spliced into the middle of our still-open `{ ... }` body
+        # -- a real, confirmed corruption (Engine's and Mapper's full
+        # struct text appearing between two of Session's field lines).
+        # Resolving all field types first means any such nested emission
+        # completes and lands in mono_buf BEFORE this struct's own text
+        # starts, so the two are sequential, never interleaved.
+        mut _fld_c_tys = Vec[str].init(cls.fields.len)
+        mut _fpi = 0
+        while _fpi < cls.fields.len:
+            _fld_c_tys.push(self.type_to_c(cls.fields.get(_fpi).ty))
+            _fpi = _fpi + 1
+
         # Forward declaration
         self.w("typedef struct " + mono_name + " " + mono_name + ";\n")
 
@@ -1022,7 +1043,7 @@ pub class CGenerator:
         mut fi = 0
         while fi < cls.fields.len:
             mut f = cls.fields.get(fi)
-            self.w("    " + self.type_to_c(f.ty) + " " + f.name + ";\n")
+            self.w("    " + _fld_c_tys.get(fi) + " " + f.name + ";\n")
             fi = fi + 1
         if cls.fields.len == 0 and _mono_vt:
             self.w("    char _pad;\n")
@@ -1064,6 +1085,21 @@ pub class CGenerator:
             # expected everywhere the function is called, an immediate
             # incompatible-types compile error at every call site.
             mut old_throws = self.cur_throws_ty
+            # See ensure_mono_func_n's identical fix (same file) for the
+            # full account: this method-body loop can also run
+            # RE-ENTRANTLY, mid-generation of an ENCLOSING function's own
+            # body (a call to a generic method inside a loop, etc.), so
+            # decl_vars and its siblings must be saved/restored here too,
+            # not just reset -- otherwise a later statement in the
+            # ENCLOSING body loses track of its own already-declared
+            # locals.
+            mut old_decl_vars = self.decl_vars
+            mut old_str_local_names = self.str_local_names
+            mut old_coll_local_sfx = self.coll_local_sfx
+            mut old_coll_local_idict = self.coll_local_idict
+            mut old_coll_local_strval = self.coll_local_strval
+            mut old_coll_local_vtcoll = self.coll_local_vtcoll
+            mut old_self_is_ptr = self.cur_self_is_ptr
             self.cur_class = mono_name
             self.cur_func  = m.name
             self.cur_throws_ty = m.throws_ty.name
@@ -1078,11 +1114,17 @@ pub class CGenerator:
             mut sig = self.get_inline_attrs(m) + self.gen_func_sig(m, mono_name)
             self.w(sig + " {\n")
             self.gen_func_body(m.body, 1)
-            self.cur_self_is_ptr = false
+            self.cur_self_is_ptr = old_self_is_ptr
             self.w("}\n\n")
             self.cur_class = old_class
             self.cur_func  = old_func
             self.cur_throws_ty = old_throws
+            self.decl_vars = old_decl_vars
+            self.str_local_names = old_str_local_names
+            self.coll_local_sfx = old_coll_local_sfx
+            self.coll_local_idict = old_coll_local_idict
+            self.coll_local_strval = old_coll_local_strval
+            self.coll_local_vtcoll = old_coll_local_vtcoll
             mi = mi + 1
         self.fn_mono_body = self.buf
         self.buf        = _cmb_obuf
@@ -1333,6 +1375,35 @@ pub class CGenerator:
         # statement emits a bare, unwrapped value instead of a
         # `Result`-wrapped one.
         mut old_throws = self.cur_throws_ty
+        # Per-function variable-tracking state (decl_vars and its
+        # siblings) must be SAVED and RESTORED around this call, not just
+        # reset -- this function can run RE-ENTRANTLY, mid-generation of
+        # an ENCLOSING function's own body: a call inside a while-loop
+        # etc. to another explicit generic function, using the enclosing
+        # function's OWN still-abstract type params as the callee's
+        # explicit type args (resolved via resolve_nested_mono_callee),
+        # triggers ensure_mono_func_n for THAT callee right there, in the
+        # middle of generating the enclosing function's statements.
+        # Without saving/restoring here, resetting these maps for the
+        # INNER function's own body permanently wipes the OUTER
+        # function's already-declared locals from `decl_vars`, so a
+        # later reassignment in the outer body (`count = count + 1`)
+        # wrongly reads "count was never declared" and re-declares it as
+        # a NEW shadowing local instead of assigning the existing one --
+        # "'count' undeclared" (a variable named to collide with a
+        # C-keyword-escaped name makes the bogus redeclaration's OWN
+        # unescaped read of the same name a hard compile error; on a
+        # plain, non-escaped name it would just be silent, incorrect
+        # shadowing). Confirmed directly with a minimal, taumigrate-
+        # unrelated repro (`outer[C,RS]` with a local `count`,
+        # reassigned after calling `inner[C,RS](x)` in the same loop).
+        mut old_decl_vars = self.decl_vars
+        mut old_str_local_names = self.str_local_names
+        mut old_coll_local_sfx = self.coll_local_sfx
+        mut old_coll_local_idict = self.coll_local_idict
+        mut old_coll_local_strval = self.coll_local_strval
+        mut old_coll_local_vtcoll = self.coll_local_vtcoll
+        mut old_self_is_ptr = self.cur_self_is_ptr
         self.cur_class = ""
         self.cur_func = mono_fname
         self.cur_throws_ty = f.throws_ty.name
@@ -1348,16 +1419,70 @@ pub class CGenerator:
         self.cur_self_is_ptr = f.class_name != "" and self.value_types.contains(f.class_name) and self.vt_method_mutates_self(f)
         self.w(sig + " {\n")
         self.gen_func_body(f.body, 1)
-        self.cur_self_is_ptr = false
+        self.cur_self_is_ptr = old_self_is_ptr
         self.w("}\n\n")
         self.cur_class = old_class
         self.cur_func = old_func
         self.cur_throws_ty = old_throws
+        self.decl_vars = old_decl_vars
+        self.str_local_names = old_str_local_names
+        self.coll_local_sfx = old_coll_local_sfx
+        self.coll_local_idict = old_coll_local_idict
+        self.coll_local_strval = old_coll_local_strval
+        self.coll_local_vtcoll = old_coll_local_vtcoll
         self.fn_mono_body.append(mono_body_sb.to_string().as_str())
         self.buf = old_buf
         self.struct_buf = old_sbuf
         self.proto_buf = old_pbuf
         self.type_subst = old_subst
+
+    # See gen_call's call site for the full account of why this exists.
+    # Splits a `fname__MONO_T1_T2`-style mangled callee name and resolves
+    # EACH type-arg segment through the ACTIVE monomorphization
+    # substitution via resolve_generic_tyname -- a segment that isn't
+    # currently substituted (i.e. it was already a concrete type name
+    # written at a non-generic call site, the common/pre-existing case)
+    # comes back unchanged. If at least one segment actually resolved to
+    # something new, triggers ensure_mono_func/_n for the NOW-concrete
+    # target (so the name this returns is guaranteed to actually get
+    # generated somewhere) and returns the re-mangled name; otherwise
+    # returns `mangled` completely unchanged, a no-op for every
+    # already-working call shape.
+    pub def resolve_nested_mono_callee(self, mangled: str) -> str:
+        mut nlen = _tr_strlen(mangled)
+        mut si = 0
+        mut found = false
+        mut sep_p = 0
+        while si <= nlen - 7 and not found:
+            if mangled.slice(si, si + 7) == "__MONO_":
+                found = true
+                sep_p = si
+            si = si + 1
+        if not found: return mangled
+        mut fn_name = mangled.slice(0, sep_p)
+        mut targ_text = mangled.slice(sep_p + 7, nlen)
+        mut raw_targs = targ_text.split("_")
+        mut new_targs: Vec[str] = Vec[str].init(raw_targs.len)
+        mut changed = false
+        mut ti = 0
+        while ti < raw_targs.len:
+            mut seg = raw_targs.get(ti)
+            mut resolved = self.resolve_generic_tyname(seg)
+            if resolved != seg: changed = true
+            new_targs.push(resolved)
+            ti = ti + 1
+        if not changed: return mangled
+        if new_targs.len == 1:
+            self.ensure_mono_func(fn_name, new_targs.get(0))
+        else:
+            self.ensure_mono_func_n(fn_name, new_targs)
+        mut joined = ""
+        mut ji = 0
+        while ji < new_targs.len:
+            if ji > 0: joined = joined + "_"
+            joined = joined + new_targs.get(ji)
+            ji = ji + 1
+        return fn_name + "__MONO_" + joined
 
     # Infer the single type argument of a generic METHOD (its OWN `[T]`, distinct from
     # the class's generics) from the call args. Args align to the non-self params.
@@ -1435,6 +1560,17 @@ pub class CGenerator:
         self.proto_buf = self.fn_mono_body
         mut old_class = self.cur_class
         mut old_func = self.cur_func
+        # See ensure_mono_func_n's identical fix (same file) for the full
+        # account: this can also run RE-ENTRANTLY mid-generation of an
+        # ENCLOSING function's body, so decl_vars and its siblings must
+        # be saved/restored here too, not just reset.
+        mut old_decl_vars = self.decl_vars
+        mut old_str_local_names = self.str_local_names
+        mut old_coll_local_sfx = self.coll_local_sfx
+        mut old_coll_local_idict = self.coll_local_idict
+        mut old_coll_local_strval = self.coll_local_strval
+        mut old_coll_local_vtcoll = self.coll_local_vtcoll
+        mut old_self_is_ptr = self.cur_self_is_ptr
         self.cur_class = cls_name
         self.cur_func = method
         self.decl_vars = Map[str, bool].init(64)
@@ -1447,10 +1583,16 @@ pub class CGenerator:
         self.cur_self_is_ptr = self.value_types.contains(cls_name) and self.vt_method_mutates_self(m)
         self.w(sig + " {\n")
         self.gen_func_body(m.body, 1)
-        self.cur_self_is_ptr = false
+        self.cur_self_is_ptr = old_self_is_ptr
         self.w("}\n\n")
         self.cur_class = old_class
         self.cur_func = old_func
+        self.decl_vars = old_decl_vars
+        self.str_local_names = old_str_local_names
+        self.coll_local_sfx = old_coll_local_sfx
+        self.coll_local_idict = old_coll_local_idict
+        self.coll_local_strval = old_coll_local_strval
+        self.coll_local_vtcoll = old_coll_local_vtcoll
         self.fn_mono_body = self.buf
         self.buf = old_buf
         self.struct_buf = old_sbuf
@@ -1598,12 +1740,80 @@ pub class CGenerator:
             i = i + 1
         return fwd + defs
 
-    # Emit the top-level global-initializer statements (assignments to hoisted globals
-    # + any module-scope code) — the SAME logic main() runs inline. Shared so the
-    # @entry reset trampoline initializes globals too: @entry boots past main(), so
-    # without this a non-zero global initializer (mut x: usize = 0x...) stays at its
-    # .bss zero (a silent HardFault). Writes via self.w.
-    pub def emit_global_inits(self, prog: HirProgram):
+    # True if `e` is DEFINITELY non-allocating: a literal, or a cast/unary/binary
+    # combination of already-safe sub-expressions. Deliberately conservative —
+    # ANY call (a class `.init()`, a plain function, a method) or collection
+    # literal (List/Dict/Set/Tuple, even empty — `List_T_new()` still mallocs
+    # the header) is treated as risky, since there is no general way to know
+    # whether an arbitrary callee allocates transitively. Used to split a
+    # module's global initializers into two prologues — see the call site's
+    # own comment (bugs.txt #1 vs the allocator-ordering hazard found in
+    # nebula's ide_demo_web) for why the split exists.
+    pub def is_safe_global_init(self, e: Pointer[HirExpr]) -> bool:
+        if _is_invalid_ptr(e as usize): return true
+        match e.read():
+            case HirExpr.ELitInt(_, _): return true
+            case HirExpr.ELitFloat(_, _): return true
+            case HirExpr.ELitBool(_, _): return true
+            case HirExpr.ELitChar(_, _): return true
+            case HirExpr.ELitNone(_): return true
+            case HirExpr.EIdent(_, _, _): return true
+            case HirExpr.ECast(inner, _): return self.is_safe_global_init(inner)
+            case HirExpr.EUnaryOp(_, inner, _): return self.is_safe_global_init(inner)
+            case HirExpr.EBinOp(_, l, r, _): return self.is_safe_global_init(l) and self.is_safe_global_init(r)
+            case _: return false
+
+    # Names of module-level globals that have a real (non-null) initializer
+    # expression, split by is_safe_global_init. Used to decide which exported
+    # function(s) should carry which half of the freestanding first-call-wins
+    # global-init prologue — see that call site's own comment for why
+    # "whichever export runs first, one shared block" is not sound once any
+    # initializer allocates: found via nebula's ide_demo_web hanging at
+    # runtime because `_it = Interpreter.init()` (an allocating global
+    # initializer) ran before the program's own `nebula_heap_init` export had
+    # called its `arena_init(base, size)`. safe_names (literals/casts/ops —
+    # e.g. `mut _next: usize = 0 as usize`) are harmless to run on the FIRST
+    # export call regardless of allocator state, so they keep the original
+    # unconditional-first-call behavior. risky_names (anything that calls a
+    # constructor or builds a collection) are deferred to whichever export's
+    # body actually references one of them — normally the export called AFTER
+    # the allocator-bootstrap one in every nebula example's own convention.
+    pub def global_init_names(self, prog: HirProgram, safe_names: Vec[str], risky_names: Vec[str]):
+        if _is_invalid_ptr(prog as usize): return
+        if _is_invalid_ptr(prog.top_level_stmts as usize): return
+        mut i = 0
+        while i < prog.top_level_stmts.len:
+            match prog.top_level_stmts.get(i).read():
+                case HirStmt.SLet(gn, _, _, _, _, _, gv):
+                    if self.global_vars.contains(gn) and gv as usize != 0 as usize:
+                        if self.is_safe_global_init(gv): safe_names.push(gn)
+                        else: risky_names.push(gn)
+                case _: pass
+            i = i + 1
+
+    # True if `body_text` (a generated C function body) textually mentions any
+    # of `names` — a deliberately cheap substring check (false positives from
+    # an unrelated identifier sharing a suffix are harmless: they only cause
+    # the prologue to be attached to one extra function, never dropped from
+    # the one that needs it).
+    pub def _body_mentions_any(self, body_text: str, names: Vec[str]) -> bool:
+        mut i = 0
+        while i < names.len:
+            if _tr_str_contains(body_text, names.get(i)): return true
+            i = i + 1
+        return false
+
+    # Safe/risky halves of emit_global_inits (see is_safe_global_init/
+    # global_init_names' own comments) — used ONLY at the freestanding
+    # per-export "first call wins" injection sites, so an allocating
+    # initializer can be deferred past an allocator-bootstrap export while a
+    # literal one (harmless at any point) still runs on the true first call.
+    # `filter_safe` selects which half to emit; both share emit_global_inits'
+    # own gen_stmt fallback for non-SLet top-level code (kept in the safe
+    # pass only, matching that code's original unconditional-first-call
+    # behavior — the rare shape isn't part of the allocator-ordering hazard
+    # this split exists for).
+    pub def emit_global_inits_filtered(self, prog: HirProgram, filter_safe: bool):
         if _is_invalid_ptr(prog as usize): return
         if _is_invalid_ptr(prog.top_level_stmts as usize): return
         mut i = 0
@@ -1612,19 +1822,29 @@ pub class CGenerator:
             match prog.top_level_stmts.get(i).read():
                 case HirStmt.SLet(gn, _, _, _, _, _, gv):
                     if self.global_vars.contains(gn):
+                        _tlg = true
+                        mut _is_safe = gv as usize == 0 as usize or self.is_safe_global_init(gv)
                         # File-scope globals are already declared (and zero-initialized
                         # by C static storage). With a value, run the initializer here in
                         # the boot path; without one, the static zero suffices. Either way
                         # never fall through to gen_stmt, which would re-declare (shadow)
                         # the global as a main-local (breaks cross-function globals, e.g.
                         # a `[u8; N]` arena shared with an @allocator).
-                        if gv as usize != 0 as usize:
+                        if gv as usize != 0 as usize and _is_safe == filter_safe:
                             self.w("    " + gn + " = " + self.gen_expr(gv) + ";\n")
-                        _tlg = true
                 case _: pass
-            if not _tlg:
+            if not _tlg and filter_safe:
                 self.gen_stmt(prog.top_level_stmts.get(i), 1)
             i = i + 1
+
+    # Combined (safe + risky) global-init emission — the @entry boot trampoline's
+    # own single, well-defined boot path (unlike a freestanding wasm/UEFI
+    # export, there is no "which export runs first" ambiguity here, so the
+    # safe/risky split's deferral isn't needed; this preserves the original
+    # unconditional-first-call behavior for @entry targets).
+    pub def emit_global_inits(self, prog: HirProgram):
+        self.emit_global_inits_filtered(prog, true)
+        self.emit_global_inits_filtered(prog, false)
 
     # --freestanding @entry: emit a reset trampoline + Cortex-M .isr_vector table so
     # the user's @entry function is the boot entry — no hand-written startup.c. The
@@ -1716,6 +1936,8 @@ pub class CGenerator:
         if name == "Chan": return true
         if name == "ThreadPool": return true
         if name == "ThreadLocal": return true
+        if name == "AsyncPool": return true
+        if name == "AsyncTask": return true
         return false
 
     # Like get_inline_attrs but without `static` - for cross-module prototypes in tauraro_types.h.
@@ -3092,6 +3314,23 @@ pub class CGenerator:
                 return "_tr_obj_retain(" + s + ")"
             case HirExpr.EPropAccess(_, _, _):
                 return "_tr_obj_retain(" + s + ")"
+            # NOTE: `coll[i]` (EIndex) is deliberately NOT retained here, matching the
+            # EXISTING precedent for `coll.get(i)`/`.first()`/`.last()` (EMethodCall,
+            # see _obj_expr_owns_ref/_obj_store_needs_retain below): a bare collection-
+            # element read is treated as a zero-cost BORROW everywhere by default — the
+            # overwhelmingly common case (toolkit/ui/interp.tr's hit_test/emit/
+            # cursor_kind_at alone have 14+ `mut c = box.children[i]`-shaped locals, all
+            # transient: fields read or passed BY REFERENCE into a recursive call, never
+            # stored). Retaining unconditionally here once regressed exactly those sites
+            # (a leaked, never-released reference: _obj_expr_owns_ref has no EIndex case,
+            # so a local bound this way is never registered in class_local_names, so
+            # scope-exit auto-drop never releases the retain this would add — verified by
+            # re-deriving the fix and finding the leak before shipping it). The STORE
+            # side (`.append()`, a dict value, Set.add, a list-literal element — see
+            # _obj_store_needs_retain's own EIndex case) is where a genuine gap existed
+            # and is fixed instead: only a value that's actually being handed to a
+            # longer-lived container needs its own retain; a value merely bound to a
+            # local and read/forwarded needs none, exactly like `.get(i)` already works.
             case _:
                 return s
 
@@ -3178,6 +3417,28 @@ pub class CGenerator:
         match e.read():
             case HirExpr.EIdent(_, _, _): return false
             case HirExpr.EPropAccess(_, _, _): return false
+            # `coll[i]` is a heap-class ALIAS into that collection's own owned storage —
+            # exactly the same "borrowed element read" as `coll.get(i)`/.first()/.last()
+            # just below, which this call site already retains-on-store. The subscript
+            # SYNTAX form (EIndex) of the identical operation had no case here and fell
+            # to the catch-all `false` at the bottom of this match, silently skipping the
+            # retain whenever a `coll[i]` read (rather than `coll.get(i)`) was stored into
+            # a longer-lived container. Found via nebula's `toolkit/ui/interp.tr`
+            # `Interpreter.emit()`: `self.overlays.append(box.children[i])` stores a
+            # `List[LayoutBox]` element read via `[i]` into a second, longer-lived
+            # `List[LayoutBox]` field without retaining, so releasing either the source
+            # tree or `self.overlays` frees the shared LayoutBox out from under the
+            # other — a double-free/use-after-free, observed as `_trdrop_LayoutBox`
+            # "memory access out of bounds" under the arena allocator (no real free(),
+            # so corruption only surfaces once the arena reuses those exact bytes).
+            # NOTE: this is the STORE-side fix only — obj_retain_wrap deliberately does
+            # NOT retain a bare `coll[i]` read (see its own comment): retaining there
+            # unconditionally regressed the far more common transient/borrow case (a
+            # `mut c = box.children[i]` local that's only read or forwarded by reference,
+            # e.g. hit_test's own `mut oc = box.children[oi]`), since _obj_expr_owns_ref
+            # has no EIndex case either and never registers such a local for scope-exit
+            # release — an unpaired retain leaked on every ordinary tree walk.
+            case HirExpr.EIndex(_, _, _): return true
             case HirExpr.ECall(callee, _, _):
                 match callee.read():
                     case HirExpr.EIdent(cn, _, _):
@@ -3619,6 +3880,30 @@ pub class CGenerator:
                 # Use raw identifier name (not gen_expr output) so C-keyword variable names
                 # like `int`, `float`, `count` don't obscure builtin dispatch.
                 base_callee = raw_n
+                # An explicit generic call `f[T1,T2](...)` mangles its callee
+                # to `f__MONO_T1_T2` once, at SEMA time -- baked as literal
+                # text from whatever names were written at the call site.
+                # When that call site sits inside ANOTHER generic function's
+                # own body, T1/T2 are the OUTER function's own still-abstract
+                # type PARAMETERS, not concrete types: sema can't know what
+                # they'll resolve to, since that's only decided per-
+                # instantiation, here, during codegen's OWN monomorphization
+                # of the outer function. Without this, the baked name is
+                # emitted completely unchanged in every instantiation --
+                # "implicit declaration of function 'inner__MONO_C_RS'" (a
+                # real copy for the ACTUAL concrete types, e.g.
+                # "inner__MONO_Foo_int", was never generated either, since
+                # nothing ever asked for it). Confirmed directly with a
+                # minimal, DB-unrelated repro (`outer[C,RS]` calling
+                # `inner[C,RS](x)`, instantiated as `outer[Foo,int]`).
+                if base_callee.contains("__MONO_"):
+                    base_callee = self.resolve_nested_mono_callee(base_callee)
+                    # Every fallback return in this function uses callee_s
+                    # (computed above, from the UN-resolved name) for a
+                    # plain identifier callee, not base_callee -- keep them
+                    # in sync for this case so the resolved name actually
+                    # reaches the emitted call text.
+                    callee_s = base_callee
             case HirExpr.EIndex(base_expr, idx_expr, idx_ty):
                 match base_expr.read():
                     case HirExpr.EIdent(n, _, _):
@@ -3828,10 +4113,18 @@ pub class CGenerator:
         if base_callee == "type":
             return "\"<object>\""
 
-        # await_all(f1(args), f2(args), ...) - run all calls concurrently, wait for completion
+        # await_all(f1(args), f2(args), ...) - run all calls concurrently, wait
+        # for completion. Each sub-call is submitted onto the shared,
+        # core-sized, work-stealing AsyncPool (_tr_atg_spawn) rather than
+        # spawning one throwaway OS thread per call (_tr_thread_start) -
+        # unbounded before this (1000 sub-calls = 1000 OS threads), now a
+        # small reused worker pool. Sendable checking on every sub-call's
+        # args (sema.tr) is unchanged and still gates this, since crossing
+        # into the pool is exactly the same kind of thread boundary as
+        # crossing into a raw OS thread was.
         if base_callee == "await_all":
             if args.len == 0: return "0LL"
-            mut aa_code = "({ _tr_tg_begin(); "
+            mut aa_code = "({ _tr_atg_begin(); "
             mut aa_i = 0
             while aa_i < args.len:
                 mut aa_fn = ""
@@ -3845,13 +4138,13 @@ pub class CGenerator:
                     case _: pass
                 if aa_fn != "":
                     if aa_call_args.len == 0:
-                        aa_code = aa_code + "_tr_tg_push(_tr_thread_start(_tr_spawn_wrap_" + aa_fn + ", NULL)); "
+                        aa_code = aa_code + "_tr_atg_spawn(_tr_spawn_wrap_" + aa_fn + ", NULL); "
                     elif aa_call_args.len == 1:
                         mut aa_aty = hir_expr_type(aa_call_args.get(0)).name
                         mut aa_vcast = "(void*)(uintptr_t)(" + self.gen_expr(aa_call_args.get(0)) + ")"
                         if not _is_int_type(aa_aty) and aa_aty != "bool" and aa_aty != "char":
                             aa_vcast = "(void*)(" + self.gen_expr(aa_call_args.get(0)) + ")"
-                        aa_code = aa_code + "_tr_tg_push(_tr_thread_start(_tr_spawn_wrap_" + aa_fn + ", " + aa_vcast + ")); "
+                        aa_code = aa_code + "_tr_atg_spawn(_tr_spawn_wrap_" + aa_fn + ", " + aa_vcast + "); "
                     else:
                         # multi-arg: heap-pack
                         mut aa_na = aa_call_args.len
@@ -3864,11 +4157,11 @@ pub class CGenerator:
                             else:
                                 aa_code = aa_code + "_aab" + str(aa_i) + "[" + str(aa_ai2 + 1) + "] = (long long)(" + self.gen_expr(aa_call_args.get(aa_ai2)) + "); "
                             aa_ai2 = aa_ai2 + 1
-                        aa_code = aa_code + "_tr_tg_push(_tr_thread_start(_tr_spawn_wrap_" + aa_fn + ", _aab" + str(aa_i) + ")); } "
+                        aa_code = aa_code + "_tr_atg_spawn(_tr_spawn_wrap_" + aa_fn + ", _aab" + str(aa_i) + "); } "
                 else:
                     aa_code = aa_code + self.gen_expr(args.get(aa_i)) + "; "
                 aa_i = aa_i + 1
-            aa_code = aa_code + "_tr_taskgroup_wait(); 0LL; })"
+            aa_code = aa_code + "_tr_atg_wait(); 0LL; })"
             return aa_code
 
         # iter / enumerate / sorted / reversed - identity for now
@@ -4499,7 +4792,12 @@ pub class CGenerator:
     # independent reference the dict needs.
     pub def dict_val_arg(self, e: Pointer[HirExpr]) -> str:
         mut e_s = self.gen_expr(e)
-        if _is_str_type(hir_expr_type(e).name):
+        # resolve_generic_prim: inside a monomorphized generic method body, a
+        # value expression's raw HIR type may still be the un-substituted
+        # type PARAM name (e.g. "T" for a `Map[str, T]` value being set with
+        # T=str), which _is_str_type alone never matches — same fix as the
+        # float check a few lines below already applies.
+        if _is_str_type(self.resolve_generic_prim(hir_expr_type(e).name)):
             if self._is_fresh_str_expr(e):
                 mut tmp = "_dvt" + self.next_temp()
                 self.wrap_temp_decls.push("TrStr " + tmp + " = (" + e_s + ")")
@@ -5096,6 +5394,56 @@ pub class CGenerator:
                     return "_tr_threadpool_spawn(" + obj_s + ", (void*(*)(void*))(" + tp_fn2_s + "), NULL)"
             if method == "wait": return "_tr_threadpool_wait(" + obj_s + ")"
             if method == "free": return "_tr_threadpool_free(" + obj_s + ")"
+
+        # AsyncPool method dispatch - work-stealing pool for top-level async
+        # calls (see runtime/tauraro_rt.h's _TrAsyncPool). Same shape as
+        # ThreadPool above (submits fn+arg, returns a handle to join later),
+        # but fn runs as a coroutine on whichever worker steals/dequeues it,
+        # so fn's OWN internal `await`s work correctly, and N calls share a
+        # small, reused, core-sized pool instead of one OS thread each.
+        if t_n == "AsyncPool" or obj_s == "AsyncPool":
+            if method == "new":
+                mut ap_nw = "4LL"
+                if args.len > 0: ap_nw = self.gen_expr(args.get(0))
+                return "_tr_asyncpool_new(" + ap_nw + ")"
+            if method == "auto":
+                return "_tr_asyncpool_new(_tr_threadpool_auto_n())"
+            if method == "spawn":
+                # AsyncPool.spawn(fn, arg) -> AsyncTask - submit a not-yet-started
+                # top-level async call onto the pool's work-stealing queues.
+                if args.len >= 2:
+                    mut ap_fn_s = self.gen_expr(args.get(0))
+                    mut ap_fn_nm = ""
+                    match args.get(0).read():
+                        case HirExpr.EIdent(apn, _, _): ap_fn_nm = apn
+                        case _: pass
+                    mut ap_arg_s = "(void*)(" + self.gen_expr(args.get(1)) + ")"
+                    mut ap_aty = hir_expr_type(args.get(1)).name
+                    if _is_int_type(ap_aty) or ap_aty == "bool" or ap_aty == "char":
+                        ap_arg_s = "(void*)(uintptr_t)(" + self.gen_expr(args.get(1)) + ")"
+                    if ap_fn_nm != "":
+                        return "_tr_asyncpool_spawn(" + obj_s + ", _tr_spawn_wrap_" + ap_fn_nm + ", " + ap_arg_s + ")"
+                    return "_tr_asyncpool_spawn(" + obj_s + ", (void*(*)(void*))(" + ap_fn_s + "), " + ap_arg_s + ")"
+                elif args.len == 1:
+                    mut ap_fn2_s = self.gen_expr(args.get(0))
+                    mut ap_fn2_nm = ""
+                    match args.get(0).read():
+                        case HirExpr.EIdent(apn2, _, _): ap_fn2_nm = apn2
+                        case _: pass
+                    if ap_fn2_nm != "":
+                        return "_tr_asyncpool_spawn(" + obj_s + ", _tr_spawn_wrap_" + ap_fn2_nm + ", NULL)"
+                    return "_tr_asyncpool_spawn(" + obj_s + ", (void*(*)(void*))(" + ap_fn2_s + "), NULL)"
+            if method == "free": return "_tr_asyncpool_free(" + obj_s + ")"
+
+        # AsyncTask method dispatch - handle returned by AsyncPool.spawn.
+        # `.join()` is a cross-OS-thread join (blocks the calling thread
+        # until the task completes), matching Thread.join()/ThreadPool.wait()'s
+        # existing precedent rather than a new non-blocking mechanism. Named
+        # `join`, not `await`, since `await` is a language keyword.
+        if t_n == "AsyncTask" or obj_s == "AsyncTask":
+            if method == "join": return "_tr_asynctask_await(" + obj_s + ")"
+            if method == "done": return "_tr_asynctask_done(" + obj_s + ")"
+            if method == "free": return "_tr_asynctask_free(" + obj_s + ")"
 
         # Thread method dispatch - Thread.spawn(fn, arg), t.join(), t.detach(), Thread.sleep(ms), Thread.id()
         if t_n == "Thread" or obj_s == "Thread":
@@ -6037,23 +6385,39 @@ pub class CGenerator:
             # exactly like `.get` so str values are unboxed.
             if method == "get" or method == "get_index":
                 mut c_ty_c = self.type_to_c(call_ty)
+                # Inside a monomorphized generic method body, call_ty.name may
+                # still be the raw, un-substituted type PARAM name (e.g. "T"
+                # for a `Map[str, T]` field's `.get()` inside `extend
+                # Holder[T,...]`), not the concrete "str"/"float" it resolves
+                # to for THIS instantiation. Checking the raw name against
+                # _is_str_type/_is_float_type below always missed (neither
+                # matches "T"), falling through to the generic-cast branch,
+                # which cast the dict's void* slot DIRECTLY to the (non-
+                # scalar) TrStr/double C type -- "conversion to non-scalar
+                # type requested", confirmed directly with a minimal,
+                # tauorm-unrelated repro (`Holder[T,..]` with a `Map[str,T]`
+                # field, monomorphized with T=str). Resolve through the
+                # active type_subst first, matching how every other
+                # generic-value-in-a-collection site in this file already
+                # does (see gen_tuple_to_str's use of the same helper).
+                mut _get_vty = self.resolve_generic_prim(call_ty.name)
                 if is_idict:
                     mut iget_r = "_tr_idict_get(" + obj_s + ", " + self.gen_args(args) + ")"
-                    if _is_str_type(call_ty.name):
+                    if _is_str_type(_get_vty):
                         if self.eliding_get_retain: return "_tr_str_unbox(" + iget_r + ")"
                         return "_tr_str_retain(_tr_str_unbox(" + iget_r + "))"
                     # Float value (#24): the slot holds the f64 BIT PATTERN — reinterpret,
                     # never arithmetic-cast (that truncated 1.5 -> 1).
-                    if _is_float_type(call_ty.name):
+                    if _is_float_type(_get_vty):
                         return "_tr_ptr_to_f64(" + iget_r + ")"
                     if c_ty_c != "void" and c_ty_c != "":
                         return "((" + c_ty_c + ")(uintptr_t)" + iget_r + ")"
                     return iget_r
                 mut mget_r = "_tr_dict_get(" + obj_s + ", " + self.dict_key_arg(args.get(0)) + ")"
-                if _is_str_type(call_ty.name):
+                if _is_str_type(_get_vty):
                     if self.eliding_get_retain: return "_tr_str_unbox(" + mget_r + ")"
                     return "_tr_str_retain(_tr_str_unbox(" + mget_r + "))"
-                if _is_float_type(call_ty.name):
+                if _is_float_type(_get_vty):
                     return "_tr_ptr_to_f64(" + mget_r + ")"
                 if c_ty_c != "void" and c_ty_c != "":
                     return "((" + c_ty_c + ")(uintptr_t)" + mget_r + ")"
@@ -6097,7 +6461,10 @@ pub class CGenerator:
                 return "(_tr_dict_len(" + obj_s + ") == 0LL)"
             # get_or(key, default) - get with fallback
             if method == "get_or" and args.len >= 2:
-                mut _is_str_val = _is_str_type(call_ty.name)
+                # See the "get"/"get_index" branch above: call_ty.name can
+                # still be a raw, un-substituted generic type PARAM name
+                # inside a monomorphized method body.
+                mut _is_str_val = _is_str_type(self.resolve_generic_prim(call_ty.name))
                 mut _d = self.gen_expr(args.get(1))
                 if _is_str_val: _d = "_tr_str_box(" + _d + ")"
                 mut _res = ""
@@ -6118,7 +6485,11 @@ pub class CGenerator:
             # boxes (#54): use the _strval variant to release each boxed
             # TrStr and free its box, avoiding a per-entry leak.
             if method == "free":
-                mut _val_is_str = obj_full_ty.args.len > 1 and _is_str_type(obj_full_ty.args.get(1).read().name)
+                # resolve_generic_prim: obj_full_ty comes from the HIR's
+                # un-substituted declared field type, so a `Map[str, T]`
+                # field's value arg can still read "T" here inside a
+                # monomorphized method body (T=str for THIS instantiation).
+                mut _val_is_str = obj_full_ty.args.len > 1 and _is_str_type(self.resolve_generic_prim(obj_full_ty.args.get(1).read().name))
                 if is_idict:
                     if _val_is_str: return "_tr_idict_free_strval(" + obj_s + ")"
                     return "_tr_idict_free(" + obj_s + ")"
@@ -6545,6 +6916,30 @@ pub class CGenerator:
         elif items.len > 0:
             sfx = self.list_elem_suffix(hir_expr_type(items.get(0)).name)
         mut lsfx = self.list_sfx(sfx)
+        # Plain-old-data element types (no ARC, no per-element retain/heap-box
+        # logic) get built as ONE static C array + a bulk memcpy, instead of one
+        # `List_<T>_append(...)` call per element. Found while diagnosing why a
+        # 22,800-element `List[u8]` font-bitmap literal (toolkit/text/font_data_lg.tr)
+        # took 10+ minutes to compile on EVERY cold build/target, wasm included:
+        # the old shape put 22,800 sequential call expressions in one C statement-
+        # expression, which is roughly quadratic for clang/LLVM to parse+codegen,
+        # AND cost 22,800 individual capacity-checked heap-growing calls at every
+        # runtime startup. A static array initializer is linear for the compiler
+        # to emit (compile-time constant data, no runtime calls at all) and the
+        # memcpy replaces 22,800 function calls with one.
+        mut _pod_ctype = self.pod_list_ctype(lsfx)
+        if _pod_ctype != "" and items.len > 0:
+            mut arr = "_a_" + self.next_temp()
+            mut l = "_l_" + self.next_temp()
+            mut s = "({ " + _pod_ctype + " " + arr + "[] = {"
+            mut i = 0
+            while i < items.len:
+                s = s + self.gen_expr(items.get(i)) + ", "
+                i = i + 1
+            s = s + "}; List_" + lsfx + "* " + l + " = List_" + lsfx + "_new(); "
+            s = s + "List_" + lsfx + "_reserve(" + l + ", " + str(items.len) + "); "
+            s = s + "memcpy(" + l + "->data, " + arr + ", sizeof(" + arr + ")); " + l + "->len = " + str(items.len) + "; "
+            return s + l + "; })"
         mut l = "_l_" + self.next_temp()
         mut s = "({ List_" + lsfx + "* " + l + " = List_" + lsfx + "_new(); "
         mut i = 0
@@ -6558,6 +6953,22 @@ pub class CGenerator:
             s = s + "List_" + lsfx + "_append(" + l + ", " + item_s + "); "
             i = i + 1
         return s + l + "; })"
+
+    # C element type for a POD (non-ARC, no heap-box) List_<sfx> suffix, matching
+    # runtime/tauraro_rt.h's own struct field types exactly (List_u8.data is
+    # uint8_t*, etc) -- "" for any suffix that owns/retains its elements (str,
+    # ptr/class, TrTuple, TrFnVal, or an enum/@value_type list), which must keep
+    # using the per-element append path above.
+    pub def pod_list_ctype(self, lsfx: str) -> str:
+        if lsfx == "u8": return "uint8_t"
+        if lsfx == "i8": return "int8_t"
+        if lsfx == "u32": return "uint32_t"
+        if lsfx == "i32": return "int"
+        if lsfx == "i64": return "long long"
+        if lsfx == "f64": return "double"
+        if lsfx == "bool": return "_Bool"
+        if lsfx == "char": return "char"
+        return ""
 
     pub def gen_dict_literal(self, keys: Vec[Pointer[HirExpr]], vals: Vec[Pointer[HirExpr]], hint_ty: AstType) -> str:
         # Detect int-keyed from type args (works for empty dicts too)
@@ -7022,8 +7433,12 @@ pub class CGenerator:
                                 self.w("    " + th_ps_fn + "(" + th_ps_cs + ");\n")
                                 self.w("    free(_ab); return NULL;\n")
                                 self.w("}\n")
-                # Emit spawn wrappers for pool.spawn(fn, args...) calls
-                if pool_meth == "spawn" and hir_expr_type(pool_obj).name == "ThreadPool":
+                # Emit spawn wrappers for pool.spawn(fn, args...) calls - shared by
+                # ThreadPool (raw OS threads) and AsyncPool (work-stealing pool):
+                # the wrapper itself is identical either way (call fn, discard/box
+                # its result, return NULL/boxed void*) - only the SUBMISSION call
+                # differs (_tr_threadpool_spawn vs _tr_asyncpool_spawn, below).
+                if pool_meth == "spawn" and (hir_expr_type(pool_obj).name == "ThreadPool" or hir_expr_type(pool_obj).name == "AsyncPool"):
                     if pool_args.len >= 1:
                         # Build a synthetic ECall with fn as callee and remaining args as args
                         mut sp_fn_nm = ""
@@ -7284,7 +7699,23 @@ pub class CGenerator:
                         mut ret_s = self.gen_expr(e)
                         ret_s = self.flush_wraps(ret_s, false)
                         mut ret_ty_n = hir_expr_type(e).name
-                        if _is_int_type(ret_ty_n) or ret_ty_n == "bool" or ret_ty_n == "char":
+                        if ret_ty_n == "Result" or ret_ty_n == "Option" or ret_ty_n == "Tuple" or ret_ty_n == "tuple":
+                            # The returned EXPRESSION's own type is already the
+                            # correctly-shaped aggregate (a call to another
+                            # throws/Result-returning function, now correctly
+                            # inferred as such by sema for the explicit generic
+                            # call case too -- see sema.tr's ECall/EIndex
+                            # explicit-type-arg handling) -- return it VERBATIM,
+                            # not wrapped in a second, redundant Result_Ok layer
+                            # (which isn't even well-typed: `ret_s` already IS a
+                            # `Result` struct at the C level, so boxing it into
+                            # `.data.Ok.val=(void*)(ret_s)` is a struct-to-pointer
+                            # cast, "cannot convert to a pointer type"). Confirmed
+                            # directly with a minimal, tauorm-unrelated repro
+                            # mirroring taumigrate's introspect_schema[C,RS]
+                            # returning introspect_sqlite[C,RS](...)'s own result.
+                            self.w(pad + "return (" + ret_s + ");\n")
+                        elif _is_int_type(ret_ty_n) or ret_ty_n == "bool" or ret_ty_n == "char":
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=(void*)(uintptr_t)(" + ret_s + ")});\n")
                         elif _is_float_type(ret_ty_n):
                             self.w(pad + "return ((Result){.tag=Result_Ok, .data.Ok.val=_tr_f64_to_ptr((double)(" + ret_s + "))});\n")
@@ -7533,12 +7964,22 @@ pub class CGenerator:
                                     init_s = self.gen_expr(v)
                         self.eliding_get_retain = _saved_elide
                         # Dict.get/get_or returning a generic void* into a str-typed
-                        # local: gen_method_call only unboxes when call_ty is resolved
-                        # to "str"; recover here from the declared SLet type instead.
+                        # local: gen_method_call unboxes when call_ty resolves (via
+                        # resolve_generic_prim) to "str", but a BARE `Dict` annotation
+                        # with no value-type arg (`mut config: Dict = {...}`, #02_collections)
+                        # leaves call_ty unresolved there too -- recover here from the
+                        # declared SLet type instead. Must use the exact same resolved
+                        # check gen_method_call itself uses (not the raw call_ty.name)
+                        # so this only fires when THAT call genuinely fell through to
+                        # its generic-cast fallback -- otherwise it would double-unbox
+                        # a value gen_method_call already fully unboxed (confirmed
+                        # directly: a monomorphized `Map[str,T]` field access with
+                        # T=str produced `_tr_str_unbox(_tr_str_retain(_tr_str_unbox(...)))`
+                        # before this fix matched the two checks up).
                         if c_ty == "TrStr":
                             match v.read():
                                 case HirExpr.EMethodCall(slv_obj, slv_method, _, slv_call_ty):
-                                    if (slv_method == "get" or slv_method == "get_or") and not _is_str_type(slv_call_ty.name):
+                                    if (slv_method == "get" or slv_method == "get_or") and not _is_str_type(self.resolve_generic_prim(slv_call_ty.name)):
                                         mut slv_oty = hir_expr_type(slv_obj).name
                                         if slv_oty == "Map" or slv_oty == "Dict":
                                             init_s = "_tr_str_unbox(" + init_s + ")"
@@ -7713,6 +8154,52 @@ pub class CGenerator:
                                 mut _ai_lval = _ai_obj + ".data[(_tr_bounds_check(" + _ai_key + ", " + _ai_ty.array_size.to_str() + "), " + _ai_key + ")]"
                                 self.w(pad + self.flush_wraps(_ai_lval + " = " + self.gen_expr(v), true) + ";\n")
                                 return
+                    case _: pass
+                # `x = f()?` reassigning an ALREADY-DECLARED plain variable
+                # (as opposed to `mut x = f()?`, an SLet, handled with its
+                # own dedicated ETryExpr case elsewhere in this function)
+                # fell through to gen_expr's generic ETryExpr fallback,
+                # whose own comment admits "proper propagation handled at
+                # statement level" -- untrue for this exact statement shape.
+                # That fallback neither checks Result.tag (silently
+                # treating an Err's payload as if it were Ok, since
+                # .data.Ok.val and .data.Err.err alias the same union slot)
+                # nor unboxes a str Ok value (emitting a bare `(TrStr*)`
+                # pointer where the target's own type is a `TrStr` VALUE
+                # struct -- "incompatible types when assigning to type
+                # 'TrStr' from type 'TrStr *'"). Confirmed directly with a
+                # minimal, tauorm-unrelated repro (a `while` loop
+                # reassigning a str local from another throws function's
+                # call, inside a monomorphized generic function body).
+                # Mirrors SLet's own ETryExpr handling a few cases up;
+                # scoped to a plain EIdent target, the overwhelmingly
+                # common shape for this pattern.
+                match v.read():
+                    case HirExpr.ETryExpr(inner_try4, ok_ty4):
+                        match t.read():
+                            case HirExpr.EIdent(_trn, _, _):
+                                mut tmp_qr4 = "_qr" + self.next_temp()
+                                mut inner_qr_v4 = self.flush_wraps(self.gen_expr(inner_try4), false)
+                                self.w(pad + "Result " + tmp_qr4 + " = (" + inner_qr_v4 + ");\n")
+                                self.w(pad + "if (" + tmp_qr4 + ".tag == Result_Err) return " + tmp_qr4 + ";\n")
+                                mut ok_c4 = self.type_to_c(ok_ty4)
+                                if ok_c4 == "void" or ok_c4 == "__auto_type": ok_c4 = "long long"
+                                mut ok_val4 = ""
+                                if _is_int_type(ok_ty4.name) or ok_ty4.name == "bool" or ok_ty4.name == "char":
+                                    ok_val4 = "(" + ok_c4 + ")(uintptr_t)" + tmp_qr4 + ".data.Ok.val"
+                                elif _is_float_type(ok_ty4.name):
+                                    ok_val4 = "_tr_ptr_to_f64(" + tmp_qr4 + ".data.Ok.val)"
+                                elif _is_str_type(ok_ty4.name):
+                                    if self.str_local_names.contains(_trn):
+                                        self.w(pad + "_tr_str_release(" + _safe_c_varname(_trn) + ");\n")
+                                    ok_val4 = "_tr_str_unbox(" + tmp_qr4 + ".data.Ok.val)"
+                                elif ok_c4.ends_with("*"):
+                                    ok_val4 = "(" + ok_c4 + ")" + tmp_qr4 + ".data.Ok.val"
+                                else:
+                                    ok_val4 = "(" + ok_c4 + "*)" + tmp_qr4 + ".data.Ok.val"
+                                self.w(pad + _safe_c_varname(_trn) + " = " + ok_val4 + ";\n")
+                                return
+                            case _: pass
                     case _: pass
                 mut _assign_rhs = ""
                 match v.read():
@@ -9383,8 +9870,12 @@ pub class CGenerator:
         # a non-zero scalar default, a null-pointer crash for a class instance
         # (see bugs.txt #1). One shared, run-once guard covers every exported
         # function regardless of which one the host happens to call first.
+        mut _safe_names = Vec[str].init(8)
+        mut _risky_names = Vec[str].init(8)
         if self.tier_define == "TAURARO_KERNEL":
             self.w("static int _tr_export_globals_done = 0;\n")
+            self.w("static int _tr_export_globals_done_risky = 0;\n")
+            self.global_init_names(prog, _safe_names, _risky_names)
         i = 0
         while i < prog.functions.len:
             mut f = prog.functions.get(i)
@@ -9415,11 +9906,45 @@ pub class CGenerator:
                     self.seed_params(f)
                     self.w(self.get_inline_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
                     if f.is_export and self.tier_define == "TAURARO_KERNEL":
+                        # SAFE half (literals/casts/ops — never allocates): attached
+                        # unconditionally, exactly like bugs.txt #1's original fix,
+                        # since it is harmless no matter which export the host calls
+                        # first or what allocator state exists yet.
                         self.w("    if (!_tr_export_globals_done) {\n")
                         self.w("        _tr_export_globals_done = 1;\n")
-                        self.emit_global_inits(prog)
+                        self.emit_global_inits_filtered(prog, true)
                         self.w("    }\n")
-                    self.gen_func_body(f.body, 1)
+                        # RISKY half (anything that allocates): generate the body into a
+                        # scratch buffer FIRST so we can check whether it actually
+                        # touches one of these globals before deciding to attach this
+                        # part here — see global_init_names's own comment for why
+                        # "whichever export the host calls first" is unsound for an
+                        # allocating initializer specifically: a program's own
+                        # allocator-bootstrap export (e.g. a `nebula_heap_init` that
+                        # just calls an @allocator's own init routine) is
+                        # conventionally the FIRST thing the host calls, and its body
+                        # never touches these globals — but if this half landed there
+                        # anyway, the allocating initializer would run BEFORE the
+                        # allocator is configured, silently handing back null/garbage
+                        # instead of a real block (confirmed via nebula's ide_demo_web
+                        # hanging at runtime on exactly this). Skipping attachment here
+                        # just defers the (still exactly-once, still guaranteed) block
+                        # to the next exported call that DOES reference one of these
+                        # globals — normally the very next host call in every nebula
+                        # example's own two-call boot convention.
+                        mut _saved_buf9 = self.buf
+                        self.buf = StringBuilder.init(256)
+                        self.gen_func_body(f.body, 1)
+                        mut _body_text9 = self.buf.to_string().as_str()
+                        self.buf = _saved_buf9
+                        if self._body_mentions_any(_body_text9, _risky_names):
+                            self.w("    if (!_tr_export_globals_done_risky) {\n")
+                            self.w("        _tr_export_globals_done_risky = 1;\n")
+                            self.emit_global_inits_filtered(prog, false)
+                            self.w("    }\n")
+                        self.w(_body_text9)
+                    else:
+                        self.gen_func_body(f.body, 1)
                     self.w("}\n\n")
                     self.cur_func  = ""
                     self.cur_class = ""
@@ -9489,6 +10014,7 @@ pub class CGenerator:
 
         self.w("#ifndef TAURARO_BARE\n")
         self.w("    _tr_async_pool_shutdown();\n")
+        self.w("    _tr_asyncpool_default_shutdown();\n")
         self.w("#endif\n")
         self.w("    return 0;\n}\n")
 
@@ -9952,7 +10478,19 @@ pub class CGenerator:
         mut fwd_i = 0
         while fwd_i < prog.functions.len:
             mut fwd_f = prog.functions.get(fwd_i)
-            if fwd_f.name != "main" and not fwd_f.is_extern and not fwd_f.is_public:
+            # A generic function (unlike every other case below) has no
+            # forward declaration of its own -- only its MONOMORPHIZED
+            # copies do (emitted separately, into mono_buf). Every other
+            # prototype-emission loop in this file already excludes
+            # generics for exactly this reason; this one didn't, and
+            # nothing had exercised a PRIVATE (non-pub, so routed through
+            # this loop rather than tauraro_types.h) generic free function
+            # in a multi-module build until now -- it rendered the
+            # function's own unsubstituted param types literally (e.g. a
+            # `def(engine: Engine[C, RS])` parameter as if "C"/"RS" were
+            # real class names, "unknown type name 'Engine_C_RS'").
+            # Confirmed directly with a minimal, tauorm-unrelated repro.
+            if fwd_f.name != "main" and not fwd_f.is_extern and not fwd_f.is_public and fwd_f.generics.len == 0:
                 mut in_this_mod = false
                 if fwd_f.class_name == "" and fn_set.contains(fwd_f.name):
                     in_this_mod = true
@@ -10219,8 +10757,12 @@ pub class CGenerator:
         # statement pass below (which runs global initializers) never
         # executes for it. One shared, run-once guard, triggered from
         # whichever exported function the host happens to call first.
+        mut _safe_names2 = Vec[str].init(8)
+        mut _risky_names2 = Vec[str].init(8)
         if self.tier_define == "TAURARO_KERNEL":
             self.w("static int _tr_export_globals_done = 0;\n")
+            self.w("static int _tr_export_globals_done_risky = 0;\n")
+            self.global_init_names(prog, _safe_names2, _risky_names2)
         i = 0
         if not _is_invalid_ptr(prog as usize) and not _is_invalid_ptr(prog.functions as usize):
             while i < prog.functions.len:
@@ -10256,11 +10798,34 @@ pub class CGenerator:
                                 self.cur_self_is_ptr = f.class_name != "" and self.value_types.contains(f.class_name) and self.vt_method_mutates_self(f)
                                 self.w(self.get_proto_attrs(f) + self.gen_func_sig(f, f.class_name) + " {\n")
                                 if f.is_export and self.tier_define == "TAURARO_KERNEL":
+                                    # See the sibling loop's own comment (generate()) for the
+                                    # safe/risky split's full rationale: a literal/scalar
+                                    # global initializer is harmless on the true first export
+                                    # call (attached unconditionally, below), but an
+                                    # allocating one is deferred until the body actually
+                                    # references it — bugs.txt #1's original fix (run every
+                                    # global init from whichever export the host calls first)
+                                    # is unsound for an allocating initializer whenever that
+                                    # export is itself an allocator-bootstrap function (e.g.
+                                    # nebula_heap_init): the constructor would run before the
+                                    # allocator is configured.
                                     self.w("    if (!_tr_export_globals_done) {\n")
                                     self.w("        _tr_export_globals_done = 1;\n")
-                                    self.emit_global_inits(prog)
+                                    self.emit_global_inits_filtered(prog, true)
                                     self.w("    }\n")
-                                self.gen_func_body(f.body, 1)
+                                    mut _saved_buf10 = self.buf
+                                    self.buf = StringBuilder.init(256)
+                                    self.gen_func_body(f.body, 1)
+                                    mut _body_text10 = self.buf.to_string().as_str()
+                                    self.buf = _saved_buf10
+                                    if self._body_mentions_any(_body_text10, _risky_names2):
+                                        self.w("    if (!_tr_export_globals_done_risky) {\n")
+                                        self.w("        _tr_export_globals_done_risky = 1;\n")
+                                        self.emit_global_inits_filtered(prog, false)
+                                        self.w("    }\n")
+                                    self.w(_body_text10)
+                                else:
+                                    self.gen_func_body(f.body, 1)
                                 self.cur_self_is_ptr = false
                                 self.w("}\n\n")
                                 self.cur_func  = ""
@@ -10337,6 +10902,7 @@ pub class CGenerator:
 
         self.w("#ifndef TAURARO_BARE\n")
         self.w("    _tr_async_pool_shutdown();\n")
+        self.w("    _tr_asyncpool_default_shutdown();\n")
         self.w("#endif\n")
         self.w("    return 0;\n}\n")
         self.flush_closures()

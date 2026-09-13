@@ -1,0 +1,21 @@
+from std.core.vec import Vec
+
+async def work(n: int) -> int:
+    mut x = 0
+    mut i = 0
+    while i < 2000:
+        x = x + i
+        i = i + 1
+    return x + n
+
+async def w0() -> int: return await work(0)
+async def w1() -> int: return await work(1)
+async def w2() -> int: return await work(2)
+async def w3() -> int: return await work(3)
+
+async def main():
+    mut round = 0
+    while round < 500:
+        await_all(w0(), w1(), w2(), w3())
+        round = round + 1
+    print("done: 500 rounds x 4 sub-calls = 2000 total async calls")
